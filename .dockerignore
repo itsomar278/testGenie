@@ -1,0 +1,50 @@
+# Virtual environments
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Cache
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Workdir (mounted as volume)
+workdir/
+
+# Environment files (secrets should be passed via env vars)
+.env
+.env.*
+
+# Misc
+*.md
+!README.md
+*.txt
+!requirements.txt
+LICENSE
+uv.lock

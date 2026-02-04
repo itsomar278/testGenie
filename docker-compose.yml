@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  testgen:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: testgen
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5-coder:32b}
+      - AZURE_DEVOPS_ORGANIZATION_URL=${AZURE_DEVOPS_ORGANIZATION_URL}
+      - AZURE_DEVOPS_PERSONAL_ACCESS_TOKEN=${AZURE_DEVOPS_PERSONAL_ACCESS_TOKEN}
+      - AZURE_DEVOPS_PROJECT=${AZURE_DEVOPS_PROJECT}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./workdir:/app/workdir
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    stdin_open: true
+    tty: true

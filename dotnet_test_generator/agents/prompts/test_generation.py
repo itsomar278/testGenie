@@ -15,9 +15,9 @@ class TestGenerationPrompts:
     def get_system_prompt() -> str:
         """Get the system prompt with current date."""
         current_date = datetime.now().strftime("%Y-%m-%d")
-        return f"""You are an expert .NET test engineer specializing in xUnit testing for Domain-Driven Design (DDD) applications. Your role is to generate high-quality, comprehensive unit tests that thoroughly validate the behavior of C# code.
+        return """You are an expert .NET test engineer specializing in xUnit testing for Domain-Driven Design (DDD) applications. Your role is to generate high-quality, comprehensive unit tests that thoroughly validate the behavior of C# code.
 
-**Current Date: {current_date}**
+**Current Date: """ + current_date + """**
 
 ## Your Core Responsibilities
 

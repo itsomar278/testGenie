@@ -10,8 +10,10 @@ RUN export http_proxy=http://proxy.internal.adhie.ae:8080 && \
     apt-get install -y --no-install-recommends gcc g++ git && \
     rm -rf /var/lib/apt/lists/*
 
-# Install uv for faster package installation (no proxy - it blocks HTTPS)
-RUN pip install --no-cache-dir uv
+# Install uv for faster package installation
+RUN export http_proxy=http://proxy.internal.adhie.ae:8080 && \
+    export https_proxy=http://proxy.internal.adhie.ae:8080 && \
+    pip install --no-cache-dir uv
 
 # Copy project files needed for build
 COPY pyproject.toml README.md ./
@@ -20,7 +22,9 @@ COPY dotnet_test_generator ./dotnet_test_generator
 # Create virtual environment and install dependencies
 RUN uv venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN uv pip install --no-cache .
+RUN export http_proxy=http://proxy.internal.adhie.ae:8080 && \
+    export https_proxy=http://proxy.internal.adhie.ae:8080 && \
+    uv pip install --no-cache .
 
 # Runtime stage
 FROM python:3.11-slim AS runtime

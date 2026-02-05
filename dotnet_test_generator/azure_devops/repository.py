@@ -51,6 +51,7 @@ class RepositoryManager:
         self.work_directory = work_directory
         self.pat = personal_access_token
         self.git_ops: GitOperations | None = None
+        self._auth_config: list[str] | None = None
 
     def parse_repository_url(self, url: str) -> tuple[str, str, str]:
         """
@@ -138,6 +139,12 @@ class RepositoryManager:
         auth_url = f"{parsed.scheme}://{self.pat}@{parsed.netloc}{parsed.path}"
         return auth_url
 
+    def _get_auth_header(self) -> str:
+        """Get the authorization header for git extraheader."""
+        import base64
+        auth_string = base64.b64encode(f":{self.pat}".encode()).decode()
+        return f"AUTHORIZATION: Basic {auth_string}"
+
     def clone_repository(
         self,
         repo_info: RepositoryInfo,
@@ -161,7 +168,14 @@ class RepositoryManager:
         clone_path = self.get_clone_path(repo_info)
         target_branch = branch or repo_info.default_branch
 
-        logger.info(f"Clone target: {clone_path}")
+        logger.info(f"[CLONE] Repository: {repo_info.name}")
+        logger.info(f"[CLONE] Target path: {clone_path}")
+        logger.info(f"[CLONE] Target branch: {target_branch}")
+        logger.info(f"[CLONE] Force fresh: {force_fresh}")
+
+        # Store auth config for all git operations
+        auth_header = self._get_auth_header()
+        self._auth_config = [f'http.extraheader={auth_header}']
 
         if clone_path.exists():
             if force_fresh:
@@ -169,7 +183,7 @@ class RepositoryManager:
                 shutil.rmtree(clone_path, ignore_errors=True)
             else:
                 logger.info("Repository already exists, using existing clone")
-                self.git_ops = GitOperations(clone_path)
+                self.git_ops = GitOperations(clone_path, extra_config=self._auth_config)
                 # Fetch latest and checkout branch
                 self.git_ops.fetch_all()
                 self.git_ops.checkout(target_branch)
@@ -177,15 +191,17 @@ class RepositoryManager:
 
         clone_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Clone with authentication
-        auth_url = self._get_authenticated_clone_url(repo_info.clone_url)
+        # Clone with authentication using extraheader (proxy-friendly)
+        clone_url = repo_info.clone_url
 
         logger.info(f"Cloning repository: {repo_info.name}")
+        logger.info(f"[CLONE] Using extraheader authentication (proxy-friendly)")
         try:
             self.git_ops = GitOperations.clone(
-                url=auth_url,
+                url=clone_url,
                 path=clone_path,
                 branch=target_branch,
+                extra_config=self._auth_config,
             )
         except GitOperationError as e:
             logger.error(f"Clone failed: {e}")
@@ -204,7 +220,11 @@ class RepositoryManager:
         """
         if not self.git_ops:
             clone_path = self.get_clone_path(repo_info)
-            self.git_ops = GitOperations(clone_path)
+            # Ensure auth config is set
+            if not self._auth_config:
+                auth_header = self._get_auth_header()
+                self._auth_config = [f'http.extraheader={auth_header}']
+            self.git_ops = GitOperations(clone_path, extra_config=self._auth_config)
 
         # Remove refs/heads/ prefix if present
         branch_name = pr_source_branch

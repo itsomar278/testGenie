@@ -20,14 +20,16 @@ class GitOperations:
     by the test generation workflow.
     """
 
-    def __init__(self, repo_path: Path):
+    def __init__(self, repo_path: Path, extra_config: list[str] | None = None):
         """
         Initialize Git operations for an existing repository.
 
         Args:
             repo_path: Path to the Git repository
+            extra_config: Extra git config options for authenticated operations
         """
         self.repo_path = repo_path
+        self.extra_config = extra_config or []
         try:
             self.repo = Repo(repo_path)
         except git.InvalidGitRepositoryError as e:
@@ -37,7 +39,7 @@ class GitOperations:
             ) from e
 
     @classmethod
-    def clone(cls, url: str, path: Path, branch: str | None = None) -> Self:
+    def clone(cls, url: str, path: Path, branch: str | None = None, extra_config: list[str] | None = None) -> Self:
         """
         Clone a repository.
 
@@ -45,42 +47,161 @@ class GitOperations:
             url: Repository URL (with authentication if needed)
             path: Local path for the clone
             branch: Branch to checkout (optional)
+            extra_config: Extra git config options (e.g., ['http.extraheader=...'])
 
         Returns:
             GitOperations instance for the cloned repository
         """
-        logger.info(f"Cloning to {path}")
+        import os
+        import subprocess
+
+        logger.info(f"[GIT] Cloning to {path}")
+        logger.info(f"[GIT] Branch: {branch or 'default'}")
+
+        # Check for proxy settings
+        http_proxy = os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy')
+        https_proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
+
+        if http_proxy:
+            logger.info(f"[GIT] HTTP Proxy: {http_proxy}")
+        if https_proxy:
+            logger.info(f"[GIT] HTTPS Proxy: {https_proxy}")
+
         try:
-            kwargs = {"depth": None}  # Full clone for history
+            # Build git clone command
+            cmd = ['git']
+
+            # Add config options
+            if http_proxy:
+                cmd.extend(['-c', f'http.proxy={http_proxy}'])
+            if https_proxy:
+                cmd.extend(['-c', f'https.proxy={https_proxy}'])
+
+            # Add extra config (like auth headers)
+            if extra_config:
+                for cfg in extra_config:
+                    cmd.extend(['-c', cfg])
+                logger.info(f"[GIT] Using extraheader for authentication")
+
+            cmd.append('clone')
+
             if branch:
-                kwargs["branch"] = branch
+                cmd.extend(['-b', branch])
 
-            Repo.clone_from(url, path, **kwargs)
-            return cls(path)
+            cmd.extend([url, str(path)])
 
-        except GitCommandError as e:
-            # Sanitize error message to remove PAT
-            error_msg = str(e.stderr) if e.stderr else str(e)
-            if "@" in error_msg:
-                error_msg = "Clone failed (credentials hidden)"
+            logger.info(f"[GIT] Running git clone (config options: {len([c for c in cmd if c == '-c'])})")
+            logger.debug(f"[GIT] Command length: {len(cmd)} args")
 
+            # Run git clone using subprocess for full control
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+
+            if result.returncode != 0:
+                error_msg = result.stderr or result.stdout or "Unknown error"
+                # Sanitize credentials from error
+                if "AUTHORIZATION" in error_msg or "@" in error_msg:
+                    logger.error(f"[GIT] Clone failed (credentials hidden in logs)")
+                else:
+                    logger.error(f"[GIT] Clone error: {error_msg[:300]}")
+                raise GitOperationError(
+                    "Failed to clone repository",
+                    command="git clone",
+                    stderr=error_msg if "AUTHORIZATION" not in error_msg else "Clone failed (credentials hidden)",
+                )
+
+            logger.info(f"[GIT] Clone successful")
+            return cls(path, extra_config=extra_config)
+
+        except subprocess.TimeoutExpired:
             raise GitOperationError(
                 "Failed to clone repository",
                 command="git clone",
-                stderr=error_msg,
+                stderr="Clone timed out after 600 seconds",
+            )
+        except GitOperationError:
+            raise
+        except Exception as e:
+            raise GitOperationError(
+                "Failed to clone repository",
+                command="git clone",
+                stderr=str(e),
             ) from e
 
     def fetch_all(self) -> None:
         """Fetch all remote branches."""
-        logger.debug("Fetching all remotes")
+        import os
+        import subprocess
+
+        logger.info("[GIT] Fetching all remotes")
+
+        # Check for proxy settings
+        http_proxy = os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy')
+        https_proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
+
         try:
             for remote in self.repo.remotes:
-                remote.fetch()
-        except GitCommandError as e:
+                logger.info(f"[GIT] Fetching remote: {remote.name}")
+
+                # Build git fetch command with auth config
+                cmd = ['git', '-C', str(self.repo_path)]
+
+                # Add proxy config
+                if http_proxy:
+                    cmd.extend(['-c', f'http.proxy={http_proxy}'])
+                if https_proxy:
+                    cmd.extend(['-c', f'https.proxy={https_proxy}'])
+
+                # Add extra config (like auth headers)
+                if self.extra_config:
+                    for cfg in self.extra_config:
+                        cmd.extend(['-c', cfg])
+                    logger.info("[GIT] Using extraheader for authentication")
+
+                cmd.extend(['fetch', remote.name])
+
+                logger.debug(f"[GIT] Fetch command args count: {len(cmd)}")
+
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+
+                if result.returncode != 0:
+                    error_msg = result.stderr or result.stdout or "Unknown error"
+                    # Sanitize credentials from error
+                    if "AUTHORIZATION" in error_msg or "@" in error_msg:
+                        logger.error("[GIT] Fetch failed (credentials hidden in logs)")
+                        error_msg = "Fetch failed (credentials hidden)"
+                    else:
+                        logger.error(f"[GIT] Fetch error: {error_msg[:300]}")
+                    raise GitOperationError(
+                        "Failed to fetch",
+                        command="git fetch",
+                        stderr=error_msg,
+                    )
+
+                logger.info(f"[GIT] Fetch successful for {remote.name}")
+
+        except subprocess.TimeoutExpired:
             raise GitOperationError(
                 "Failed to fetch",
                 command="git fetch",
-                stderr=str(e.stderr),
+                stderr="Fetch timed out after 300 seconds",
+            )
+        except GitOperationError:
+            raise
+        except Exception as e:
+            raise GitOperationError(
+                "Failed to fetch",
+                command="git fetch",
+                stderr=str(e),
             ) from e
 
     def checkout(self, branch: str, create: bool = False) -> None:
@@ -91,18 +212,35 @@ class GitOperations:
             branch: Branch name
             create: Create branch if it doesn't exist
         """
-        logger.debug(f"Checking out branch: {branch}")
+        import subprocess
+
+        logger.info(f"[GIT] Checking out branch: {branch}")
         try:
             if create:
+                logger.info(f"[GIT] Creating new branch: {branch}")
                 self.repo.git.checkout("-b", branch)
             else:
                 # Try local branch first
                 if branch in [b.name for b in self.repo.branches]:
+                    logger.info(f"[GIT] Switching to local branch: {branch}")
                     self.repo.git.checkout(branch)
                 else:
-                    # Try remote branch
-                    self.repo.git.checkout("-b", branch, f"origin/{branch}")
+                    # Try remote branch - use subprocess for auth
+                    logger.info(f"[GIT] Creating local branch from origin/{branch}")
+                    cmd = ['git', '-C', str(self.repo_path), 'checkout', '-b', branch, f'origin/{branch}']
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                    if result.returncode != 0:
+                        error_msg = result.stderr or result.stdout or "Unknown error"
+                        logger.error(f"[GIT] Checkout error: {error_msg}")
+                        raise GitOperationError(
+                            f"Failed to checkout branch: {branch}",
+                            command=f"git checkout -b {branch} origin/{branch}",
+                            stderr=error_msg,
+                        )
+                    logger.info(f"[GIT] Successfully checked out {branch}")
 
+        except GitOperationError:
+            raise
         except GitCommandError as e:
             raise GitOperationError(
                 f"Failed to checkout branch: {branch}",

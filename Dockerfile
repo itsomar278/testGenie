@@ -25,11 +25,33 @@ FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
-# Install runtime dependencies (git is needed for GitPython)
+# Install runtime dependencies
+# - git: needed for GitPython
+# - wget, curl, ca-certificates: needed for downloading .NET
+# - libicu, libssl, zlib: .NET runtime dependencies
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git && \
-    rm -rf /var/lib/apt/lists/* && \
+    apt-get install -y --no-install-recommends \
+        git \
+        wget \
+        curl \
+        ca-certificates \
+        libicu-dev \
+        libssl-dev \
+        zlib1g \
+        && rm -rf /var/lib/apt/lists/* && \
     git config --global --add safe.directory '*'
+
+# Install .NET 9 SDK
+# Using the official Microsoft install script for maximum compatibility
+RUN curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 9.0 --install-dir /usr/share/dotnet && \
+    ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet
+
+# Set .NET environment variables
+ENV DOTNET_ROOT=/usr/share/dotnet
+ENV PATH="${PATH}:/usr/share/dotnet"
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
+ENV DOTNET_NOLOGO=1
+ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=false
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv

@@ -132,6 +132,9 @@ class TestRunner:
             duration = time.time() - start_time
             output = result.stdout + result.stderr
 
+            logger.info(f"[TEST] dotnet test completed with return code: {result.returncode}")
+            logger.info(f"[TEST] Output length: {len(output)} chars")
+
             # Parse results from console output
             test_result = self._parse_console_output(output)
             test_result.duration_seconds = duration
@@ -142,6 +145,17 @@ class TestRunner:
             trx_results = self._parse_trx_results()
             if trx_results:
                 test_result.test_cases = trx_results
+                logger.info(f"[TEST] Found {len(trx_results)} test cases in TRX file")
+
+                # If console parsing failed but TRX has data, use TRX counts
+                if test_result.total == 0 and len(trx_results) > 0:
+                    test_result.total = len(trx_results)
+                    test_result.passed = len([t for t in trx_results if t.outcome == "Passed"])
+                    test_result.failed = len([t for t in trx_results if t.outcome == "Failed"])
+                    test_result.skipped = len([t for t in trx_results if t.outcome in ("Skipped", "NotExecuted")])
+                    logger.info(f"[TEST] Using TRX counts: Total={test_result.total}, Passed={test_result.passed}, Failed={test_result.failed}, Skipped={test_result.skipped}")
+
+            logger.info(f"[TEST] Final results: Total={test_result.total}, Passed={test_result.passed}, Failed={test_result.failed}, Skipped={test_result.skipped}")
 
             return test_result
 
@@ -170,26 +184,70 @@ class TestRunner:
         """Parse test results from console output."""
         total = passed = failed = skipped = 0
 
-        # Look for summary line
-        patterns = {
-            "total": r"Total:\s*(\d+)",
-            "passed": r"Passed:\s*(\d+)",
-            "failed": r"Failed:\s*(\d+)",
-            "skipped": r"Skipped:\s*(\d+)",
-        }
+        logger.info(f"[TEST] Parsing test output ({len(output)} chars)")
 
-        for key, pattern in patterns.items():
-            match = re.search(pattern, output)
-            if match:
-                value = int(match.group(1))
-                if key == "total":
-                    total = value
-                elif key == "passed":
-                    passed = value
-                elif key == "failed":
-                    failed = value
-                elif key == "skipped":
-                    skipped = value
+        # Multiple patterns for different dotnet test output formats
+        # Format 1: "Total:     5" (with varying whitespace)
+        # Format 2: "Total tests: 5"
+        # Format 3: Summary line "Passed!  - Failed:     0, Passed:     5, Skipped:     0, Total:     5"
+        patterns_list = [
+            # Standard format with possible extra whitespace
+            {
+                "total": r"Total:\s+(\d+)",
+                "passed": r"Passed:\s+(\d+)",
+                "failed": r"Failed:\s+(\d+)",
+                "skipped": r"Skipped:\s+(\d+)",
+            },
+            # Alternative format "Total tests: X"
+            {
+                "total": r"Total tests:\s*(\d+)",
+                "passed": r"Passed:\s*(\d+)",
+                "failed": r"Failed:\s*(\d+)",
+                "skipped": r"Skipped:\s*(\d+)",
+            },
+            # Minimal whitespace format
+            {
+                "total": r"Total:\s*(\d+)",
+                "passed": r"Passed:\s*(\d+)",
+                "failed": r"Failed:\s*(\d+)",
+                "skipped": r"Skipped:\s*(\d+)",
+            },
+        ]
+
+        # Try each pattern set
+        for patterns in patterns_list:
+            matches_found = 0
+            temp_values = {"total": 0, "passed": 0, "failed": 0, "skipped": 0}
+
+            for key, pattern in patterns.items():
+                match = re.search(pattern, output, re.IGNORECASE)
+                if match:
+                    temp_values[key] = int(match.group(1))
+                    matches_found += 1
+                    logger.debug(f"[TEST] Found {key}: {temp_values[key]} (pattern: {pattern})")
+
+            # If we found at least total or passed, use these results
+            if matches_found >= 1 and (temp_values["total"] > 0 or temp_values["passed"] > 0):
+                total = temp_values["total"]
+                passed = temp_values["passed"]
+                failed = temp_values["failed"]
+                skipped = temp_values["skipped"]
+                logger.info(f"[TEST] Parsed from console: Total={total}, Passed={passed}, Failed={failed}, Skipped={skipped}")
+                break
+
+        # If console parsing failed, try to count test result lines
+        if total == 0:
+            # Count "Passed" and "Failed" test lines (e.g., "Passed TestName [1ms]")
+            passed_count = len(re.findall(r"^\s*Passed\s+\S+", output, re.MULTILINE))
+            failed_count = len(re.findall(r"^\s*Failed\s+\S+", output, re.MULTILINE))
+            if passed_count > 0 or failed_count > 0:
+                passed = passed_count
+                failed = failed_count
+                total = passed + failed
+                logger.info(f"[TEST] Counted from test lines: Total={total}, Passed={passed}, Failed={failed}")
+
+        if total == 0:
+            logger.warning(f"[TEST] Could not parse test results. Output preview: {output[:500]}")
 
         return TestRunResult(
             total=total,

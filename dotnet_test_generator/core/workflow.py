@@ -391,19 +391,29 @@ class TestGenerationWorkflow:
     def _run_tests(self) -> dict:
         """Run tests and return summary."""
         runner = TestRunner(self.repo_path)
+
+        logger.info("[TEST] Starting test execution...")
         result = runner.run_tests(no_build=True)
 
-        # Log test output for debugging
+        # Log test output for debugging (show more at INFO level)
         if result.output:
-            logger.debug(f"[TEST] Test output:\n{result.output[:2000]}")
+            # Show last 1000 chars which typically contains the summary
+            output_tail = result.output[-1500:] if len(result.output) > 1500 else result.output
+            logger.info(f"[TEST] Test output (last part):\n{output_tail}")
+
+        logger.info(f"[TEST] Test execution completed: success={result.success}")
+        logger.info(f"[TEST] Results: Total={result.total}, Passed={result.passed}, Failed={result.failed}, Skipped={result.skipped}")
 
         if result.total == 0:
             logger.warning("[TEST] No tests discovered. Check if:")
             logger.warning("  - Test files have correct [Fact]/[Theory] attributes")
             logger.warning("  - Test project references xunit and xunit.runner.visualstudio")
             logger.warning("  - Using statements are correct")
+            logger.warning("  - Build succeeded in Step 7")
 
-        return runner.get_summary(result)
+        summary = runner.get_summary(result)
+        logger.info(f"[TEST] Summary to be posted: {summary}")
+        return summary
 
     def _commit_changes(self, result: WorkflowResult) -> str | None:
         """Commit generated tests to the PR branch."""

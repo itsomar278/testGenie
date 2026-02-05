@@ -15,9 +15,17 @@ class TestGenerationPrompts:
     def get_system_prompt() -> str:
         """Get the system prompt with current date."""
         current_date = datetime.now().strftime("%Y-%m-%d")
-        return """You are an expert .NET test engineer specializing in xUnit testing for Domain-Driven Design (DDD) applications. Your role is to generate high-quality, comprehensive unit tests that thoroughly validate the behavior of C# code.
+        current_year = datetime.now().strftime("%Y")
+        return """
+#############################################################################
+# CRITICAL: TODAY'S DATE IS """ + current_date + """ (YEAR: """ + current_year + """)
+# YOU MUST USE THIS DATE. DO NOT USE 2023 OR ANY OTHER YEAR FROM YOUR TRAINING DATA.
+# When generating code, comments, or any date references, use """ + current_year + """ as the current year.
+#############################################################################
 
-**Current Date: """ + current_date + """**
+You are an expert .NET test engineer specializing in xUnit testing for Domain-Driven Design (DDD) applications. Your role is to generate high-quality, comprehensive unit tests that thoroughly validate the behavior of C# code.
+
+REMEMBER: The current year is """ + current_year + """, not 2023 or 2024. Today is """ + current_date + """.
 
 ## Your Core Responsibilities
 

@@ -254,15 +254,21 @@ class PullRequestManager:
         tests_modified: int,
         tests_deleted: int,
         test_results: dict,
+        test_files_created: int = 0,
+        test_files_modified: int = 0,
+        total_test_methods: int = 0,
     ) -> str:
         """
         Create a formatted summary comment for the PR.
 
         Args:
-            tests_added: Number of new test files created
+            tests_added: Number of test methods added (deprecated, use total_test_methods)
             tests_modified: Number of test files modified
             tests_deleted: Number of test files deleted
             test_results: Test execution results
+            test_files_created: Number of new test files created
+            test_files_modified: Number of existing test files modified
+            total_test_methods: Total number of test methods ([Fact]/[Theory]) written
 
         Returns:
             Formatted markdown comment
@@ -272,21 +278,25 @@ class PullRequestManager:
         failed_tests = test_results.get("failed", 0)
         skipped_tests = test_results.get("skipped", 0)
 
-        status_emoji = "✅" if failed_tests == 0 else "❌"
+        # Use total_test_methods if provided, otherwise fall back to tests_added
+        test_method_count = total_test_methods if total_test_methods > 0 else tests_added
+
+        status_emoji = "✅" if failed_tests == 0 and total_tests > 0 else ("⚠️" if total_tests == 0 else "❌")
 
         comment = f"""## 🤖 AI Test Generation Summary
 
 ### Changes Made
 | Action | Count |
 |--------|-------|
-| Tests Added | {tests_added} |
-| Tests Modified | {tests_modified} |
-| Tests Deleted | {tests_deleted} |
+| Test Files Created | {test_files_created or tests_added} |
+| Test Files Modified | {test_files_modified or tests_modified} |
+| Test Files Deleted | {tests_deleted} |
+| **Test Methods Written** | **{test_method_count}** |
 
-### Test Results {status_emoji}
+### Test Execution Results {status_emoji}
 | Metric | Value |
 |--------|-------|
-| Total Tests | {total_tests} |
+| Total Tests Discovered | {total_tests} |
 | Passed | {passed_tests} |
 | Failed | {failed_tests} |
 | Skipped | {skipped_tests} |

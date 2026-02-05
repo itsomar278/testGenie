@@ -38,13 +38,14 @@ class WorkflowResult:
     success: bool
     repository: str
     pull_request_id: int
-    tests_created: int
-    tests_modified: int
-    tests_deleted: int
+    tests_created: int  # Number of test FILES created
+    tests_modified: int  # Number of test FILES modified
+    tests_deleted: int  # Number of test FILES deleted
     build_success: bool
     test_summary: dict = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
     commit_sha: str | None = None
+    total_test_methods: int = 0  # Total [Fact] and [Theory] methods written
 
 
 class TestGenerationWorkflow:
@@ -119,7 +120,14 @@ class TestGenerationWorkflow:
         Returns:
             WorkflowResult with outcome details
         """
-        logger.info(f"Starting test generation workflow for PR #{pull_request_id}")
+        logger.info("=" * 60)
+        logger.info("STARTING TEST GENERATION WORKFLOW")
+        logger.info("=" * 60)
+        logger.info(f"Repository URL: {repository_url}")
+        logger.info(f"Pull Request ID: #{pull_request_id}")
+        logger.info(f"Work Directory: {self.settings.workflow.work_directory}")
+        logger.info(f"Ollama Model: {self.settings.ollama.model}")
+        logger.info(f"Ollama URL: {self.settings.ollama.base_url}")
 
         result = WorkflowResult(
             success=False,
@@ -133,62 +141,110 @@ class TestGenerationWorkflow:
 
         try:
             # Step 1: Clone repository
-            logger.info("Step 1: Cloning repository")
+            logger.info("-" * 40)
+            logger.info("STEP 1/10: Cloning repository")
+            logger.info("-" * 40)
             self._clone_repository(repository_url)
+            logger.info(f"[STEP 1 COMPLETE] Repository cloned to: {self.repo_path}")
 
             # Step 2: Get pull request info
-            logger.info("Step 2: Fetching pull request details")
+            logger.info("-" * 40)
+            logger.info("STEP 2/10: Fetching pull request details")
+            logger.info("-" * 40)
             self._fetch_pull_request(pull_request_id)
+            logger.info(f"[STEP 2 COMPLETE] PR Title: {self.pr_info.title}")
+            logger.info(f"[STEP 2 COMPLETE] Source Branch: {self.pr_info.source_branch}")
+            logger.info(f"[STEP 2 COMPLETE] Target Branch: {self.pr_info.target_branch_name}")
+            logger.info(f"[STEP 2 COMPLETE] Changed Files: {len(self.pr_info.changes)}")
 
             # Step 3: Parse and index codebase
-            logger.info("Step 3: Parsing codebase")
+            logger.info("-" * 40)
+            logger.info("STEP 3/10: Parsing codebase")
+            logger.info("-" * 40)
             self._parse_codebase()
+            logger.info("[STEP 3 COMPLETE] Codebase indexed successfully")
 
             # Step 4: Analyze changes
-            logger.info("Step 4: Analyzing changes")
+            logger.info("-" * 40)
+            logger.info("STEP 4/10: Analyzing changes")
+            logger.info("-" * 40)
             change_analysis = self._analyze_changes()
+            logger.info(f"[STEP 4 COMPLETE] Source changes: {len(change_analysis.source_changes)}")
+            logger.info(f"[STEP 4 COMPLETE] Test changes: {len(change_analysis.test_changes)}")
+            logger.info(f"[STEP 4 COMPLETE] Other changes: {len(change_analysis.other_changes)}")
+            logger.info(f"[STEP 4 COMPLETE] Files needing tests: {len(change_analysis.files_needing_tests)}")
 
             if not change_analysis.files_needing_tests:
-                logger.info("No source files need test generation")
+                logger.info("No source files need test generation - workflow complete")
                 result.success = True
                 return result
 
+            # Log files that need tests
+            for ctx in change_analysis.files_needing_tests:
+                logger.info(f"  - {ctx.change.path} ({ctx.change.change_type.value})")
+
             # Step 5: Generate/update tests
-            logger.info("Step 5: Generating tests")
+            logger.info("-" * 40)
+            logger.info("STEP 5/10: Generating tests")
+            logger.info("-" * 40)
             generation_results = self._generate_tests(change_analysis)
 
             result.tests_created = len([r for r in generation_results if r.action == "created"])
             result.tests_modified = len([r for r in generation_results if r.action == "updated"])
+            result.total_test_methods = sum(r.tests_written for r in generation_results)
+            logger.info(f"[STEP 5 COMPLETE] Test files created: {result.tests_created}")
+            logger.info(f"[STEP 5 COMPLETE] Test files modified: {result.tests_modified}")
+            logger.info(f"[STEP 5 COMPLETE] Total test methods written: {result.total_test_methods}")
 
             # Step 6: Handle deleted files
-            logger.info("Step 6: Processing deleted files")
+            logger.info("-" * 40)
+            logger.info("STEP 6/10: Processing deleted files")
+            logger.info("-" * 40)
             deleted_count = self._handle_deletions(change_analysis)
             result.tests_deleted = deleted_count
+            logger.info(f"[STEP 6 COMPLETE] Tests deleted: {deleted_count}")
 
             # Step 7: Build and fix loop
-            logger.info("Step 7: Building and fixing")
+            logger.info("-" * 40)
+            logger.info("STEP 7/10: Building and fixing")
+            logger.info("-" * 40)
             build_result = self._build_and_fix()
             result.build_success = build_result.success
+            logger.info(f"[STEP 7 COMPLETE] Build success: {result.build_success}")
 
             if not result.build_success:
+                logger.error(f"[STEP 7 FAILED] Build errors: {build_result.error_count}")
+                for err in build_result.errors[:5]:
+                    logger.error(f"  - {err.file}:{err.line} {err.code}: {err.message}")
                 result.errors.append("Build failed after fix attempts")
 
             # Step 8: Run tests
-            logger.info("Step 8: Running tests")
+            logger.info("-" * 40)
+            logger.info("STEP 8/10: Running tests")
+            logger.info("-" * 40)
             test_result = self._run_tests()
             result.test_summary = test_result
+            logger.info(f"[STEP 8 COMPLETE] Test results: {test_result}")
 
             # Step 9: Commit and push
-            logger.info("Step 9: Committing changes")
+            logger.info("-" * 40)
+            logger.info("STEP 9/10: Committing changes")
+            logger.info("-" * 40)
             commit_sha = self._commit_changes(result)
             result.commit_sha = commit_sha
+            logger.info(f"[STEP 9 COMPLETE] Commit SHA: {commit_sha or 'No changes to commit'}")
 
             # Step 10: Post PR comment
-            logger.info("Step 10: Posting PR comment")
+            logger.info("-" * 40)
+            logger.info("STEP 10/10: Posting PR comment")
+            logger.info("-" * 40)
             self._post_pr_comment(result)
+            logger.info("[STEP 10 COMPLETE] PR comment posted")
 
             result.success = result.build_success
-            logger.info(f"Workflow completed: success={result.success}")
+            logger.info("=" * 60)
+            logger.info(f"WORKFLOW COMPLETED: {'SUCCESS' if result.success else 'FAILED'}")
+            logger.info("=" * 60)
 
         except Exception as e:
             logger.error(f"Workflow failed: {e}")
@@ -336,6 +392,17 @@ class TestGenerationWorkflow:
         """Run tests and return summary."""
         runner = TestRunner(self.repo_path)
         result = runner.run_tests(no_build=True)
+
+        # Log test output for debugging
+        if result.output:
+            logger.debug(f"[TEST] Test output:\n{result.output[:2000]}")
+
+        if result.total == 0:
+            logger.warning("[TEST] No tests discovered. Check if:")
+            logger.warning("  - Test files have correct [Fact]/[Theory] attributes")
+            logger.warning("  - Test project references xunit and xunit.runner.visualstudio")
+            logger.warning("  - Using statements are correct")
+
         return runner.get_summary(result)
 
     def _commit_changes(self, result: WorkflowResult) -> str | None:
@@ -355,8 +422,8 @@ class TestGenerationWorkflow:
             logger.info("No changes to commit")
             return None
 
-        # Stage all changes in tests directory
-        self.git_ops.add_all()
+        # Only stage test files, exclude build artifacts
+        self._stage_test_files_only()
 
         # Create commit message
         message = self._create_commit_message(result)
@@ -368,6 +435,63 @@ class TestGenerationWorkflow:
         self.git_ops.push()
 
         return commit_sha
+
+    def _stage_test_files_only(self) -> None:
+        """Stage only test files, excluding build artifacts and other junk."""
+        import subprocess
+
+        # Patterns to exclude from staging
+        exclude_patterns = [
+            "bin/",
+            "obj/",
+            "debug/",
+            "release/",
+            ".vs/",
+            ".idea/",
+            "*.user",
+            "*.suo",
+            "*.cache",
+            "packages/",
+            "node_modules/",
+            "TestResults/",
+            ".nuget/",
+            "*.nupkg",
+            "*.snupkg",
+            ".testgen/",
+        ]
+
+        # Get all untracked and modified files
+        status = self.git_ops.status()
+        all_files = status["modified"] + status["untracked"]
+
+        # Filter to only test files (.cs files in tests/ directory)
+        test_files = []
+        for f in all_files:
+            f_lower = f.lower().replace("\\", "/")
+
+            # Must be in tests directory and be a .cs file
+            if not (f_lower.startswith("tests/") or "/tests/" in f_lower):
+                continue
+            if not f_lower.endswith(".cs"):
+                continue
+
+            # Check against exclude patterns
+            excluded = False
+            for pattern in exclude_patterns:
+                if pattern.rstrip("/") in f_lower:
+                    excluded = True
+                    break
+
+            if not excluded:
+                test_files.append(f)
+
+        if test_files:
+            logger.info(f"Staging {len(test_files)} test files")
+            for f in test_files:
+                logger.debug(f"  Staging: {f}")
+            self.git_ops.add(test_files)
+        else:
+            logger.info("No test files to stage")
 
     def _create_commit_message(self, result: WorkflowResult) -> str:
         """Create commit message for generated tests."""
@@ -392,6 +516,9 @@ class TestGenerationWorkflow:
             tests_modified=result.tests_modified,
             tests_deleted=result.tests_deleted,
             test_results=result.test_summary,
+            test_files_created=result.tests_created,
+            test_files_modified=result.tests_modified,
+            total_test_methods=result.total_test_methods,
         )
 
         pr_manager.post_comment(

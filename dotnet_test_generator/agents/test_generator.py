@@ -83,8 +83,8 @@ class TestGeneratorAgent(BaseAgent):
         self._test_path: str = ""
 
     def get_system_prompt(self) -> str:
-        """Get the system prompt for test generation."""
-        return TestGenerationPrompts.SYSTEM_PROMPT
+        """Get the system prompt for test generation with current date."""
+        return TestGenerationPrompts.get_system_prompt()
 
     def get_initial_user_message(self, **kwargs) -> str:
         """
@@ -188,14 +188,20 @@ class TestGeneratorAgent(BaseAgent):
         Returns:
             TestGenerationResult with outcome
         """
-        logger.info(f"Generating tests for: {context.change.path}")
+        logger.info(f"[TESTGEN] Starting test generation for: {context.change.path}")
+        logger.info(f"[TESTGEN] Change type: {context.change.change_type.value}")
+        logger.info(f"[TESTGEN] Target test file: {context.test_file_path}")
+        logger.info(f"[TESTGEN] Existing test content: {'Yes' if context.test_content_current else 'No'}")
+        logger.info(f"[TESTGEN] Source content size: {len(context.source_content_new or '')} chars")
 
         try:
             result = self.run(context=context)
+            logger.info(f"[TESTGEN] Generation completed: {result.action}")
+            logger.info(f"[TESTGEN] Tests written: {result.tests_written}")
             return result
 
         except Exception as e:
-            logger.error(f"Test generation failed: {e}")
+            logger.error(f"[TESTGEN] Test generation failed: {e}")
             return TestGenerationResult(
                 source_path=context.change.path,
                 test_path=context.test_file_path or "",

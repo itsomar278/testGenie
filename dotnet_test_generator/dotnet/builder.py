@@ -73,7 +73,10 @@ class SolutionBuilder:
         Returns:
             True if restore succeeded
         """
-        logger.info("Restoring packages")
+        logger.info("[DOTNET] Starting package restore")
+        logger.info(f"[DOTNET] Working directory: {self.repo_path}")
+        logger.info(f"[DOTNET] Project: {project or 'all'}")
+        logger.info(f"[DOTNET] Timeout: {timeout}s")
 
         cmd = ["dotnet", "restore"]
         if project:
@@ -115,7 +118,11 @@ class SolutionBuilder:
         Returns:
             BuildResult with outcome details
         """
-        logger.info(f"Building ({configuration})")
+        logger.info("[DOTNET] Starting build")
+        logger.info(f"[DOTNET] Configuration: {configuration}")
+        logger.info(f"[DOTNET] No restore: {no_restore}")
+        logger.info(f"[DOTNET] Project: {project or 'all'}")
+        logger.info(f"[DOTNET] Timeout: {timeout}s")
 
         import time
         start_time = time.time()
@@ -140,8 +147,17 @@ class SolutionBuilder:
 
             errors, warnings = self._parse_build_output(output)
 
+            success = result.returncode == 0
+            logger.info(f"[DOTNET] Build {'succeeded' if success else 'failed'} in {duration:.2f}s")
+            logger.info(f"[DOTNET] Errors: {len(errors)}, Warnings: {len(warnings)}")
+            if errors:
+                for err in errors[:5]:
+                    logger.error(f"[DOTNET]   {err.file}:{err.line} - {err.code}: {err.message}")
+            if len(errors) > 5:
+                logger.error(f"[DOTNET]   ... and {len(errors) - 5} more errors")
+
             return BuildResult(
-                success=result.returncode == 0,
+                success=success,
                 duration_seconds=duration,
                 errors=errors,
                 warnings=warnings,

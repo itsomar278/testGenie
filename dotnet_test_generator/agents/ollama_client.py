@@ -115,10 +115,14 @@ class OllamaClient:
 
     def is_available(self) -> bool:
         """Check if Ollama server is available."""
+        logger.debug(f"Checking Ollama availability at {self.base_url}")
         try:
             response = self.client.get(f"{self.base_url}/api/tags")
-            return response.status_code == 200
-        except Exception:
+            available = response.status_code == 200
+            logger.info(f"Ollama server {'available' if available else 'not available'} at {self.base_url}")
+            return available
+        except Exception as e:
+            logger.error(f"Ollama connection failed: {e}")
             return False
 
     def list_models(self) -> list[str]:
@@ -167,15 +171,24 @@ class OllamaClient:
         if tools:
             payload["tools"] = [t.to_dict() for t in tools]
 
-        logger.debug(f"Chat request: {len(messages)} messages, {len(tools or [])} tools")
+        logger.info(f"[OLLAMA] Sending chat request to model: {self.model}")
+        logger.info(f"[OLLAMA] Messages: {len(messages)}, Tools: {len(tools or [])}")
+        logger.debug(f"[OLLAMA] Context window: {self.num_ctx}, Temperature: {self.temperature}")
 
         try:
             if stream:
-                return self._chat_stream(payload)
+                response = self._chat_stream(payload)
             else:
-                return self._chat_sync(payload)
+                response = self._chat_sync(payload)
+
+            logger.info(f"[OLLAMA] Response received - Tokens: {response.total_tokens}")
+            logger.info(f"[OLLAMA] Tool calls: {len(response.tool_calls)}, Finish reason: {response.finish_reason}")
+            if response.content:
+                logger.debug(f"[OLLAMA] Response preview: {response.content[:200]}...")
+            return response
 
         except httpx.RequestError as e:
+            logger.error(f"[OLLAMA] Request failed: {e}")
             raise AgentError(f"Ollama request failed: {e}") from e
 
     def _message_to_dict(self, message: Message) -> dict:

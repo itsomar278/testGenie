@@ -115,12 +115,15 @@ class AzureDevOpsClient:
             AzureDevOpsError: On API errors
         """
         url = self._build_url(path, is_git_api)
-        logger.debug(f"API Request: {method} {url}")
+        logger.info(f"[ADO API] {method} {path}")
+        logger.debug(f"[ADO API] Full URL: {url}")
 
         try:
             response = self.client.request(method, url, **kwargs)
+            logger.info(f"[ADO API] Response: {response.status_code}")
 
             if response.status_code >= 400:
+                logger.error(f"[ADO API] Error response: {response.text[:500]}")
                 raise AzureDevOpsError(
                     f"API request failed: {response.status_code}",
                     status_code=response.status_code,
@@ -133,6 +136,7 @@ class AzureDevOpsClient:
             return response.json()
 
         except httpx.RequestError as e:
+            logger.error(f"[ADO API] Request error: {e}")
             raise AzureDevOpsError(f"Request failed: {e}") from e
 
     def get(self, path: str, is_git_api: bool = False, **kwargs: Any) -> dict:

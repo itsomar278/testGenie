@@ -99,7 +99,8 @@ class ChangeDetector:
         Returns:
             ChangeAnalysis with categorized changes
         """
-        logger.info(f"Analyzing {len(pr_info.changes)} changes in PR #{pr_info.id}")
+        logger.info(f"[CHANGE] Analyzing {len(pr_info.changes)} changes in PR #{pr_info.id}")
+        logger.info(f"[CHANGE] Target branch: {target_branch or pr_info.target_branch_name}")
 
         source_changes = []
         test_changes = []
@@ -109,6 +110,7 @@ class ChangeDetector:
         target = target_branch or pr_info.target_branch_name
 
         for change in pr_info.changes:
+            logger.debug(f"[CHANGE] Processing: {change.path} ({change.change_type.value})")
             if not change.is_csharp_file:
                 other_changes.append(change)
                 continue

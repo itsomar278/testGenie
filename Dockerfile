@@ -1,24 +1,18 @@
 # Build stage - compile tree-sitter and other native dependencies
 FROM python:3.11-slim AS builder
 
-# Configure proxy
-ENV HTTP_PROXY=http://proxy.internal.adhie.ae:8080
-ENV HTTPS_PROXY=http://proxy.internal.adhie.ae:8080
-ENV http_proxy=http://proxy.internal.adhie.ae:8080
-ENV https_proxy=http://proxy.internal.adhie.ae:8080
-ENV NO_PROXY=localhost,127.0.0.1,host.docker.internal
-ENV no_proxy=localhost,127.0.0.1,host.docker.internal
-
 WORKDIR /build
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install build dependencies (with proxy for apt-get)
+RUN http_proxy=http://proxy.internal.adhie.ae:8080 \
+    https_proxy=http://proxy.internal.adhie.ae:8080 \
+    apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv for faster package installation
+# Install uv for faster package installation (no proxy - it blocks HTTPS)
 RUN pip install --no-cache-dir uv
 
 # Copy project files needed for build
@@ -33,18 +27,12 @@ RUN uv pip install --no-cache .
 # Runtime stage
 FROM python:3.11-slim AS runtime
 
-# Configure proxy
-ENV HTTP_PROXY=http://proxy.internal.adhie.ae:8080
-ENV HTTPS_PROXY=http://proxy.internal.adhie.ae:8080
-ENV http_proxy=http://proxy.internal.adhie.ae:8080
-ENV https_proxy=http://proxy.internal.adhie.ae:8080
-ENV NO_PROXY=localhost,127.0.0.1,host.docker.internal
-ENV no_proxy=localhost,127.0.0.1,host.docker.internal
-
 WORKDIR /app
 
-# Install runtime dependencies (git is needed for GitPython)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install runtime dependencies (with proxy for apt-get)
+RUN http_proxy=http://proxy.internal.adhie.ae:8080 \
+    https_proxy=http://proxy.internal.adhie.ae:8080 \
+    apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/* \
     && git config --global --add safe.directory '*'

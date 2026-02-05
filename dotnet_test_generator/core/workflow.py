@@ -247,7 +247,9 @@ class TestGenerationWorkflow:
             logger.info("=" * 60)
 
         except Exception as e:
-            logger.error(f"Workflow failed: {e}")
+            # Escape brackets to prevent Rich markup parsing errors
+            error_msg = str(e).replace("[", "[[").replace("]", "]]")
+            logger.error(f"Workflow failed: {error_msg}")
             result.errors.append(str(e))
 
         finally:

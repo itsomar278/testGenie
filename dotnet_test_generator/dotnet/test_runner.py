@@ -152,9 +152,10 @@ class TestRunner:
             logger.info(f"[TEST] stdout length: {len(stdout_output)} chars, stderr length: {len(stderr_output)} chars")
             logger.info(f"[TEST] Total output length: {len(output)} chars")
 
-            # Log first 500 chars of output for debugging
+            # Log first 500 chars of output for debugging (escape brackets for Rich)
             if output:
-                logger.info(f"[TEST] Output start: {output[:500]}")
+                safe_output = output[:500].replace("[", "[[").replace("]", "]]")
+                logger.info(f"[TEST] Output start: {safe_output}")
             else:
                 logger.warning("[TEST] No output from dotnet test command!")
 
@@ -270,7 +271,8 @@ class TestRunner:
                 logger.info(f"[TEST] Counted from test lines: Total={total}, Passed={passed}, Failed={failed}")
 
         if total == 0:
-            logger.warning(f"[TEST] Could not parse test results. Output preview: {output[:500]}")
+            safe_preview = output[:500].replace("[", "[[").replace("]", "]]")
+            logger.warning(f"[TEST] Could not parse test results. Output preview: {safe_preview}")
 
         return TestRunResult(
             total=total,

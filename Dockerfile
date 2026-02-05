@@ -4,13 +4,11 @@ FROM python:3.11-slim AS builder
 WORKDIR /build
 
 # Install build dependencies (with proxy for apt-get)
-RUN http_proxy=http://proxy.internal.adhie.ae:8080 \
-    https_proxy=http://proxy.internal.adhie.ae:8080 \
-    apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    g++ \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+RUN export http_proxy=http://proxy.internal.adhie.ae:8080 && \
+    export https_proxy=http://proxy.internal.adhie.ae:8080 && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends gcc g++ git && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install uv for faster package installation (no proxy - it blocks HTTPS)
 RUN pip install --no-cache-dir uv
@@ -30,12 +28,12 @@ FROM python:3.11-slim AS runtime
 WORKDIR /app
 
 # Install runtime dependencies (with proxy for apt-get)
-RUN http_proxy=http://proxy.internal.adhie.ae:8080 \
-    https_proxy=http://proxy.internal.adhie.ae:8080 \
-    apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    && rm -rf /var/lib/apt/lists/* \
-    && git config --global --add safe.directory '*'
+RUN export http_proxy=http://proxy.internal.adhie.ae:8080 && \
+    export https_proxy=http://proxy.internal.adhie.ae:8080 && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends git && \
+    rm -rf /var/lib/apt/lists/* && \
+    git config --global --add safe.directory '*'
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv

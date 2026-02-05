@@ -66,26 +66,43 @@ class RepositoryManager:
         Raises:
             AzureDevOpsError: If URL format is invalid
         """
+        from urllib.parse import unquote
         parsed = urlparse(url)
+        parts = parsed.path.strip("/").split("/")
 
         # Handle dev.azure.com format
         # https://dev.azure.com/org/project/_git/repo
         if "dev.azure.com" in parsed.netloc:
-            parts = parsed.path.strip("/").split("/")
             if len(parts) >= 4 and parts[2] == "_git":
-                return parsed.netloc.split("/")[-1] or parts[0], parts[1], parts[3]
+                return parsed.netloc.split("/")[-1] or parts[0], parts[1], unquote(parts[3])
 
         # Handle visualstudio.com format
         # https://org.visualstudio.com/project/_git/repo
         if "visualstudio.com" in parsed.netloc:
             org = parsed.netloc.split(".")[0]
-            parts = parsed.path.strip("/").split("/")
             if len(parts) >= 3 and parts[1] == "_git":
-                return org, parts[0], parts[2]
+                return org, parts[0], unquote(parts[2])
+
+        # Handle internal/on-prem Azure DevOps Server format
+        # https://server/collection/project/_git/repo
+        # Example: https://devops.malaffi.ae/ADHDS/SFF-Sandbox-nonprod/_git/survey%20repo
+        if "_git" in parsed.path:
+            try:
+                git_index = parts.index("_git")
+                if git_index >= 2 and git_index + 1 < len(parts):
+                    # collection/org is parts[0], project is parts[git_index-1], repo is parts[git_index+1]
+                    org = parts[0]  # Collection name (e.g., ADHDS)
+                    project = parts[git_index - 1]  # Project name
+                    repo = unquote(parts[git_index + 1])  # Repo name (URL decoded)
+                    logger.info(f"[URL] Parsed internal ADO URL: org={org}, project={project}, repo={repo}")
+                    return org, project, repo
+            except (ValueError, IndexError):
+                pass
 
         raise AzureDevOpsError(
             f"Cannot parse repository URL: {url}. "
-            "Expected format: https://dev.azure.com/org/project/_git/repo"
+            "Expected format: https://dev.azure.com/org/project/_git/repo or "
+            "https://server/collection/project/_git/repo"
         )
 
     def get_repository_info(self, repository_url: str) -> RepositoryInfo:

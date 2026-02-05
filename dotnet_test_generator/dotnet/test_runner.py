@@ -78,7 +78,7 @@ class TestRunner:
         self,
         project: str | None = None,
         filter_expr: str | None = None,
-        no_build: bool = True,
+        no_build: bool = False,  # Changed default to False - always build tests
         timeout: int = 600,
         collect_coverage: bool = False,
     ) -> TestRunResult:
@@ -88,24 +88,34 @@ class TestRunner:
         Args:
             project: Optional test project path
             filter_expr: Test filter expression
-            no_build: Skip build step
+            no_build: Skip build step (default False - always build to ensure tests exist)
             timeout: Timeout in seconds
             collect_coverage: Collect code coverage
 
         Returns:
             TestRunResult with execution details
         """
-        logger.info("Running tests")
+        logger.info("[TEST] Running tests")
+        logger.info(f"[TEST] Working directory: {self.repo_path}")
 
         import time
         start_time = time.time()
 
-        # Prepare command
+        # Try to find test projects
+        test_projects = list(self.repo_path.glob("**/tests/**/*.csproj")) + \
+                       list(self.repo_path.glob("**/*.Tests.csproj")) + \
+                       list(self.repo_path.glob("**/*Tests/*.csproj"))
+        logger.info(f"[TEST] Found {len(test_projects)} potential test projects")
+        for tp in test_projects[:5]:
+            logger.info(f"[TEST]   - {tp.relative_to(self.repo_path)}")
+
+        # Prepare command - use detailed verbosity to get more output
         cmd = [
             "dotnet", "test",
             "--logger", "trx",
-            "--logger", "console;verbosity=normal",
+            "--logger", "console;verbosity=detailed",
             "--results-directory", str(self.results_path),
+            "--verbosity", "normal",
         ]
 
         if no_build:
@@ -120,6 +130,8 @@ class TestRunner:
         if project:
             cmd.append(project)
 
+        logger.info(f"[TEST] Command: {' '.join(cmd)}")
+
         try:
             result = subprocess.run(
                 cmd,
@@ -130,10 +142,21 @@ class TestRunner:
             )
 
             duration = time.time() - start_time
-            output = result.stdout + result.stderr
+
+            # Capture both stdout and stderr
+            stdout_output = result.stdout or ""
+            stderr_output = result.stderr or ""
+            output = stdout_output + stderr_output
 
             logger.info(f"[TEST] dotnet test completed with return code: {result.returncode}")
-            logger.info(f"[TEST] Output length: {len(output)} chars")
+            logger.info(f"[TEST] stdout length: {len(stdout_output)} chars, stderr length: {len(stderr_output)} chars")
+            logger.info(f"[TEST] Total output length: {len(output)} chars")
+
+            # Log first 500 chars of output for debugging
+            if output:
+                logger.info(f"[TEST] Output start: {output[:500]}")
+            else:
+                logger.warning("[TEST] No output from dotnet test command!")
 
             # Parse results from console output
             test_result = self._parse_console_output(output)

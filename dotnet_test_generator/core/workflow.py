@@ -393,7 +393,8 @@ class TestGenerationWorkflow:
         runner = TestRunner(self.repo_path)
 
         logger.info("[TEST] Starting test execution...")
-        result = runner.run_tests(no_build=True)
+        # Don't skip build - ensure test projects are compiled
+        result = runner.run_tests(no_build=False)
 
         # Log test output for debugging (show more at INFO level)
         if result.output:

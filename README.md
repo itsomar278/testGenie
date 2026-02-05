@@ -314,6 +314,140 @@ For large repositories:
 - Test projects must follow naming convention (`*.Tests`)
 - Single solution per repository recommended
 
+## Docker Setup
+
+### Prerequisites
+
+Ensure Docker is installed on your dev machine:
+```bash
+docker --version
+```
+
+If not installed:
+```bash
+sudo apt install -y docker.io
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+### Step 1: Clone the Repository
+
+```bash
+git clone https://github.com/itsomar278/testGenie.git
+cd testGenie
+```
+
+### Step 2: Build the Docker Image
+
+```bash
+docker build -t testgen .
+```
+
+### Step 3: Create Environment File
+
+```bash
+cat > .env << 'EOF'
+# Azure DevOps Configuration (Required)
+AZURE_DEVOPS_ORGANIZATION_URL=https://dev.azure.com/itsomar278
+AZURE_DEVOPS_PERSONAL_ACCESS_TOKEN=your-pat-here
+AZURE_DEVOPS_PROJECT=SimpleDDD
+
+# Ollama Configuration
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+OLLAMA_MODEL=qwen2.5-coder:32b
+OLLAMA_NUM_CTX=32768
+OLLAMA_TEMPERATURE=0.1
+OLLAMA_TIMEOUT=600
+
+# Workflow Configuration
+WORKFLOW_WORK_DIRECTORY=/app/workdir
+WORKFLOW_MAX_BUILD_FIX_ITERATIONS=10
+WORKFLOW_MAX_TEST_FIX_ITERATIONS=5
+WORKFLOW_FORCE_FRESH_CLONE=true
+
+# Logging
+LOG_LEVEL=INFO
+LOG_RICH_CONSOLE=true
+EOF
+```
+
+Edit the `.env` file and replace `your-pat-here` with your actual Azure DevOps PAT:
+```bash
+nano .env
+```
+
+### Step 4: Run the Container
+
+**Show help:**
+```bash
+docker run --rm --env-file .env testgen --help
+```
+
+**Run analysis on a local .NET project:**
+```bash
+docker run --rm \
+  --add-host=host.docker.internal:host-gateway \
+  --env-file .env \
+  -v /path/to/your/dotnet/project:/app/workdir \
+  testgen analyze /app/workdir
+```
+
+**Run with interactive shell (for debugging):**
+```bash
+docker run --rm -it \
+  --add-host=host.docker.internal:host-gateway \
+  --env-file .env \
+  -v /path/to/your/dotnet/project:/app/workdir \
+  --entrypoint /bin/bash \
+  testgen
+```
+
+### Step 5: Ollama Setup (if running on same machine)
+
+```bash
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull the model
+ollama pull qwen2.5-coder:32b
+
+# Verify Ollama is running
+curl http://localhost:11434/api/tags
+```
+
+### Docker Quick Reference
+
+| Command | Description |
+|---------|-------------|
+| `docker build -t testgen .` | Build the image |
+| `docker run --rm testgen --help` | Show help |
+| `docker images` | List images |
+| `docker ps` | List running containers |
+| `docker logs <container-id>` | View container logs |
+| `docker system prune` | Clean up unused images/containers |
+
+### Docker Troubleshooting
+
+**Ollama connection refused:**
+```bash
+# Make sure Ollama is running
+sudo systemctl start ollama
+
+# Or if using Docker for Ollama
+docker run -d -p 11434:11434 ollama/ollama
+```
+
+**Permission denied on mounted volume:**
+```bash
+sudo chown -R $USER:$USER /path/to/your/dotnet/project
+```
+
+**Check container logs:**
+```bash
+docker run --env-file .env testgen analyze /app/workdir
+docker logs $(docker ps -lq)
+```
+
 ## License
 
 MIT License

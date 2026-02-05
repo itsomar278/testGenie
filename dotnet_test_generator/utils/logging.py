@@ -40,7 +40,7 @@ def setup_logging(
             console=console,
             show_time=True,
             show_path=False,
-            markup=True,
+            markup=False,  # Disable markup to prevent [brackets] being parsed as tags
             rich_tracebacks=True,
         )
         console_handler.setLevel(getattr(logging, level.upper()))

@@ -43,7 +43,7 @@ class OllamaSettings(BaseSettings):
         description="Generation temperature (lower = more deterministic)",
     )
     num_ctx: int = Field(
-        default=32768,
+        default=96304,
         description="Context size for the model",
     )
     timeout: int = Field(

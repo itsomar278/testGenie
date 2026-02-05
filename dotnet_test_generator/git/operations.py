@@ -392,26 +392,77 @@ class GitOperations:
             branch: Branch to push (defaults to current)
             force: Force push
         """
+        import os
+        import subprocess
+
         branch = branch or self.get_current_branch()
-        logger.info(f"Pushing to origin/{branch}")
+        logger.info(f"[GIT] Pushing to origin/{branch}")
+
+        # Check for proxy settings
+        http_proxy = os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy')
+        https_proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
 
         try:
-            origin = self.repo.remote("origin")
-            push_args = [branch]
+            # Build git push command with auth config
+            cmd = ['git', '-C', str(self.repo_path)]
+
+            # Add proxy config
+            if http_proxy:
+                cmd.extend(['-c', f'http.proxy={http_proxy}'])
+            if https_proxy:
+                cmd.extend(['-c', f'https.proxy={https_proxy}'])
+
+            # Add extra config (like auth headers)
+            if self.extra_config:
+                for cfg in self.extra_config:
+                    cmd.extend(['-c', cfg])
+                logger.info("[GIT] Using extraheader for authentication")
+
+            cmd.append('push')
+
             if force:
-                push_args.insert(0, "--force")
+                cmd.append('--force')
 
-            origin.push(refspec=f"{branch}:{branch}", force=force)
+            cmd.extend(['origin', f'{branch}:{branch}'])
 
-        except GitCommandError as e:
-            error_msg = str(e.stderr) if e.stderr else str(e)
-            if "@" in error_msg:
-                error_msg = "Push failed (credentials hidden)"
+            logger.debug(f"[GIT] Push command args count: {len(cmd)}")
 
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+
+            if result.returncode != 0:
+                error_msg = result.stderr or result.stdout or "Unknown error"
+                # Sanitize credentials from error
+                if "AUTHORIZATION" in error_msg or "@" in error_msg:
+                    logger.error("[GIT] Push failed (credentials hidden in logs)")
+                    error_msg = "Push failed (credentials hidden)"
+                else:
+                    logger.error(f"[GIT] Push error: {error_msg[:300]}")
+                raise GitOperationError(
+                    f"Failed to push to {branch}",
+                    command="git push",
+                    stderr=error_msg,
+                )
+
+            logger.info(f"[GIT] Push successful to origin/{branch}")
+
+        except subprocess.TimeoutExpired:
             raise GitOperationError(
                 f"Failed to push to {branch}",
                 command="git push",
-                stderr=error_msg,
+                stderr="Push timed out after 300 seconds",
+            )
+        except GitOperationError:
+            raise
+        except Exception as e:
+            raise GitOperationError(
+                f"Failed to push to {branch}",
+                command="git push",
+                stderr=str(e),
             ) from e
 
     def reset_hard(self, ref: str = "HEAD") -> None:

@@ -214,6 +214,17 @@ class BuildFixOrchestrator:
         try:
             result = agent.run(errors=initial_errors)
 
+            # Handle case where agent returns None (e.g. max iterations hit)
+            if result is None:
+                logger.warning("Build fixer agent returned no result")
+                result = BuildFixResult(
+                    success=False,
+                    iterations_used=agent.state.iteration,
+                    errors_fixed=0,
+                    remaining_errors=initial_errors,
+                    error="Agent did not produce a result (max iterations or no tool calls)",
+                )
+
             # Verify with a final build
             final_errors = self._run_build()
             result.remaining_errors = final_errors
@@ -227,6 +238,7 @@ class BuildFixOrchestrator:
                 success=False,
                 iterations_used=0,
                 errors_fixed=0,
+                remaining_errors=initial_errors or [],
                 error=str(e),
             )
 

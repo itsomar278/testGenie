@@ -213,9 +213,15 @@ class TestGenerationWorkflow:
             logger.info(f"[STEP 7 COMPLETE] Build success: {result.build_success}")
 
             if not result.build_success:
-                logger.error(f"[STEP 7 FAILED] Build errors: {build_result.error_count}")
-                for err in build_result.errors[:5]:
-                    logger.error(f"  - {err.file}:{err.line} {err.code}: {err.message}")
+                # Handle both BuildResult (from builder) and BuildFixResult (from fixer)
+                if hasattr(build_result, 'error_count'):
+                    logger.error(f"[STEP 7 FAILED] Build errors: {build_result.error_count}")
+                    for err in build_result.errors[:5]:
+                        logger.error(f"  - {err.file}:{err.line} {err.code}: {err.message}")
+                elif hasattr(build_result, 'remaining_errors'):
+                    logger.error(f"[STEP 7 FAILED] Remaining errors: {len(build_result.remaining_errors)}")
+                    for err in build_result.remaining_errors[:5]:
+                        logger.error(f"  - {err.get('file', '?')}:{err.get('line', '?')} {err.get('code', '?')}: {err.get('message', '?')}")
                 result.errors.append("Build failed after fix attempts")
 
             # Step 8: Run tests

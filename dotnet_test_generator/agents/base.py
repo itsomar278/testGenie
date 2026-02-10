@@ -74,6 +74,8 @@ class BaseAgent(ABC):
         self.state = AgentState()
         self._on_message_callback: Callable[[Message], None] | None = None
         self._on_tool_call_callback: Callable[[str, dict, ToolResult], None] | None = None
+        self._consecutive_no_tool_calls = 0
+        self._max_consecutive_no_tool_calls = 3
 
     def on_message(self, callback: Callable[[Message], None]) -> None:
         """Set callback for new messages."""
@@ -161,6 +163,7 @@ class BaseAgent(ABC):
 
             # Handle tool calls
             if response.has_tool_calls:
+                self._consecutive_no_tool_calls = 0
                 self._handle_tool_calls(response)
 
                 # Also check if task is complete after tool calls
@@ -169,7 +172,9 @@ class BaseAgent(ABC):
                     self.state.completed = True
                     self.state.result = self.process_result(response)
             else:
-                # No tool calls - check if we're done
+                # No tool calls - track consecutive misses
+                self._consecutive_no_tool_calls += 1
+
                 assistant_msg = Message(role="assistant", content=response.content)
                 self.state.messages.append(assistant_msg)
 
@@ -178,6 +183,14 @@ class BaseAgent(ABC):
 
                 # Let subclass decide if we're done
                 if self._is_task_complete(response):
+                    self.state.completed = True
+                    self.state.result = self.process_result(response)
+                elif self._consecutive_no_tool_calls >= self._max_consecutive_no_tool_calls:
+                    # LLM is stuck producing text without calling tools
+                    logger.warning(
+                        f"Agent stuck: {self._consecutive_no_tool_calls} consecutive "
+                        f"responses without tool calls. Stopping."
+                    )
                     self.state.completed = True
                     self.state.result = self.process_result(response)
                 else:
@@ -195,6 +208,12 @@ class BaseAgent(ABC):
         if not self.state.completed:
             logger.warning(f"Agent hit max iterations: {self.config.max_iterations}")
             self.state.errors.append("Max iterations reached")
+            # Ensure we still produce a result even on max iterations
+            if self.state.result is None:
+                try:
+                    self.state.result = self.process_result(response)
+                except Exception:
+                    pass
 
         logger.info(
             f"Agent completed: {self.state.iteration} iterations, "

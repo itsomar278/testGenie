@@ -109,22 +109,30 @@ class ChangeDetector:
 
         target = target_branch or pr_info.target_branch_name
 
+        # Log all changes for debugging
+        logger.info(f"[CHANGE] All PR changes ({len(pr_info.changes)} files):")
+        for change in pr_info.changes:
+            logger.info(f"[CHANGE]   - '{change.path}' (type={change.change_type.value}, cs={change.is_csharp_file}, src={change.is_source_file}, test={change.is_test_file})")
+
         for change in pr_info.changes:
             logger.debug(f"[CHANGE] Processing: {change.path} ({change.change_type.value})")
             if not change.is_csharp_file:
+                logger.debug(f"[CHANGE]   -> Not a C# file, skipping")
                 other_changes.append(change)
                 continue
 
             if change.is_test_file:
+                logger.debug(f"[CHANGE]   -> Test file")
                 test_changes.append(change)
                 continue
 
             if change.is_source_file:
+                logger.info(f"[CHANGE]   -> SOURCE FILE DETECTED: {change.path}")
                 context = self._build_change_context(change, target)
                 source_changes.append(context)
 
                 # Create mapping
-                test_path = change.get_corresponding_test_path()
+                test_path = change.get_corresponding_test_path(self.repo_path)
                 if test_path:
                     test_exists = (self.repo_path / test_path).exists()
                     mappings.append(TestFileMapping(
@@ -133,7 +141,9 @@ class ChangeDetector:
                         source_exists=change.change_type != ChangeType.DELETE,
                         test_exists=test_exists,
                     ))
+                    logger.info(f"[CHANGE]     -> Test path mapping: {test_path} (exists: {test_exists})")
             else:
+                logger.info(f"[CHANGE]   -> C# file but NOT source or test: {change.path}")
                 other_changes.append(change)
 
         logger.info(
@@ -173,7 +183,7 @@ class ChangeDetector:
                 logger.warning(f"Could not read {file_path}: {e}")
 
         # Get test file info
-        test_path = change.get_corresponding_test_path()
+        test_path = change.get_corresponding_test_path(self.repo_path)
         if test_path:
             context.test_file_path = test_path
             test_file = self.repo_path / test_path

@@ -46,12 +46,23 @@ RUN apt-get update && \
 RUN curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 9.0 --install-dir /usr/share/dotnet && \
     ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet
 
+# Install Azure Artifacts Credential Provider for NuGet feed authentication
+# This enables VSS_NUGET_EXTERNAL_FEED_ENDPOINTS-based auth with Azure DevOps feeds
+RUN curl -sSL https://aka.ms/install-artifacts-credprovider.sh | bash
+
 # Set .NET environment variables
 ENV DOTNET_ROOT=/usr/share/dotnet
 ENV PATH="${PATH}:/usr/share/dotnet"
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 ENV DOTNET_NOLOGO=1
 ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=false
+
+# Bypass proxy for internal Azure DevOps servers
+ENV NO_PROXY="devops.malaffi.ae,localhost,127.0.0.1"
+ENV no_proxy="devops.malaffi.ae,localhost,127.0.0.1"
+
+# Internal NuGet feed for shared packages (added alongside nuget.org)
+ENV NUGET_INTERNAL_FEED="https://devops.malaffi.ae/ADHDS/bc771773-61a4-46e7-94fa-b2cce0ef7fc3/_packaging/Nugetpackage-Dev/nuget/v3/index.json"
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv

@@ -354,21 +354,56 @@ class TestGenerationWorkflow:
 
     def _build_and_fix(self) -> Any:
         """Build solution and fix any errors."""
-        client = self._init_ollama_client()
+        import os
+        from dotnet_test_generator.dotnet.builder import BuildResult, BuildErrorInfo
 
-        # First try a simple build
+        logger.info("=" * 60)
+        logger.info("STEP 7: BUILD AND FIX")
+        logger.info("=" * 60)
+
+        # Skip build for testing if env var is set
+        if os.environ.get("SKIP_BUILD", "").lower() in ("1", "true", "yes"):
+            logger.info("[BUILD] SKIP_BUILD enabled - skipping restore and build")
+            return BuildResult(success=True, duration_seconds=0.0, output="Build skipped")
+
         builder = SolutionBuilder(self.repo_path)
 
-        # Restore packages
-        builder.restore()
+        # Step 7a: Restore packages
+        logger.info("[BUILD] Step 7a: Restoring NuGet packages...")
+        restore_success = builder.restore()
 
-        # Initial build
+        if not restore_success:
+            logger.error("[BUILD] ✗ Package restore FAILED - cannot proceed with build")
+            logger.error("[BUILD] Check the restore output above for details")
+            return BuildResult(
+                success=False,
+                duration_seconds=0.0,
+                errors=[BuildErrorInfo(
+                    file="",
+                    line=0,
+                    column=0,
+                    code="RESTORE_FAILED",
+                    message="NuGet package restore failed. Check logs for details.",
+                )],
+                output="Restore failed",
+            )
+
+        logger.info("[BUILD] ✓ Package restore succeeded")
+
+        # Step 7b: Initial build
+        logger.info("[BUILD] Step 7b: Building solution...")
         build_result = builder.build()
 
         if build_result.success:
+            logger.info("[BUILD] ✓ Build succeeded on first attempt")
             return build_result
 
-        # Use build fixer
+        # Step 7c: Build failed - attempt to fix
+        logger.info(f"[BUILD] Build failed with {build_result.error_count} errors")
+        logger.info("[BUILD] Step 7c: Attempting to fix build errors with AI...")
+
+        client = self._init_ollama_client()
+
         fixer = BuildFixOrchestrator(
             client=client,
             repo_path=self.repo_path,
@@ -386,10 +421,26 @@ class TestGenerationWorkflow:
             for e in build_result.errors
         ]
 
-        return fixer.fix_build(initial_errors=errors)
+        fix_result = fixer.fix_build(initial_errors=errors)
+
+        if fix_result.success:
+            logger.info("[BUILD] ✓ Build succeeded after fixing errors")
+        else:
+            logger.error("[BUILD] ✗ Build still failing after fix attempts")
+            if hasattr(fix_result, 'remaining_errors') and fix_result.remaining_errors:
+                logger.error(f"[BUILD] Remaining errors: {len(fix_result.remaining_errors)}")
+
+        return fix_result
 
     def _run_tests(self) -> dict:
         """Run tests and return summary."""
+        import os
+
+        # Skip tests if SKIP_BUILD is set
+        if os.environ.get("SKIP_BUILD", "").lower() in ("1", "true", "yes"):
+            logger.info("[TEST] SKIP_BUILD enabled - skipping test execution")
+            return {"skipped": True, "reason": "SKIP_BUILD enabled"}
+
         runner = TestRunner(self.repo_path)
 
         logger.info("[TEST] Starting test execution...")
@@ -475,15 +526,19 @@ class TestGenerationWorkflow:
         status = self.git_ops.status()
         all_files = status["modified"] + status["untracked"]
 
-        # Filter to only test files (.cs files in tests/ directory)
+        # Filter to only test files (.cs files in test project directories)
+        # Test projects can be at root (DomainTests/) or in tests/ folder
         test_files = []
         for f in all_files:
             f_lower = f.lower().replace("\\", "/")
 
-            # Must be in tests directory and be a .cs file
-            if not (f_lower.startswith("tests/") or "/tests/" in f_lower):
-                continue
+            # Must be a .cs file
             if not f_lower.endswith(".cs"):
+                continue
+
+            # Must be in a test directory (contains "test" in path)
+            # This matches: DomainTests/, ApplicationTests/, tests/Something/, etc.
+            if "test" not in f_lower:
                 continue
 
             # Check against exclude patterns

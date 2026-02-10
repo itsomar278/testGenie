@@ -162,6 +162,12 @@ class BaseAgent(ABC):
             # Handle tool calls
             if response.has_tool_calls:
                 self._handle_tool_calls(response)
+
+                # Also check if task is complete after tool calls
+                # (e.g., if the write_file tool wrote the test file)
+                if self._is_task_complete(response):
+                    self.state.completed = True
+                    self.state.result = self.process_result(response)
             else:
                 # No tool calls - check if we're done
                 assistant_msg = Message(role="assistant", content=response.content)

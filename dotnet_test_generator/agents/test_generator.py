@@ -63,7 +63,7 @@ class TestGeneratorAgent(BaseAgent):
         if config is None:
             config = AgentConfig(
                 name="TestGenerator",
-                max_iterations=30,
+                max_iterations=15,  # Enough iterations to write tests but not loop forever
                 max_context_tokens=75000,
             )
 
@@ -150,22 +150,22 @@ class TestGeneratorAgent(BaseAgent):
 
     def _is_task_complete(self, response: ChatResponse) -> bool:
         """Check if test generation is complete."""
-        # Check if test file exists
+        # Check if test file exists and has content
         if self._test_path:
             test_file = self.repo_path / self._test_path
             if test_file.exists():
-                return True
+                try:
+                    content = test_file.read_text()
+                    # If file has [Fact] or [Theory], tests were written
+                    if "[Fact]" in content or "[Theory]" in content:
+                        logger.info(f"[TESTGEN] Task complete - test file exists with test methods")
+                        return True
+                except Exception:
+                    pass
 
-        # Check response content for completion markers
-        content = response.content.lower()
-        completion_markers = [
-            "test file has been created",
-            "test file has been written",
-            "tests have been generated",
-            "successfully wrote",
-            "tests written to",
-        ]
-        return any(marker in content for marker in completion_markers)
+        # Only mark complete based on file existence, not response content
+        # Response content markers are too unreliable
+        return False
 
     def _get_continuation_prompt(self, response: ChatResponse) -> str | None:
         """Get continuation prompt if task is not complete."""

@@ -2,6 +2,7 @@
 
 import subprocess
 import re
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -62,6 +63,7 @@ class TestRunner:
     Handles test execution for .NET projects.
 
     Uses dotnet test to run xUnit tests and parses results.
+    Full transparency logging for debugging.
     """
 
     def __init__(self, repo_path: Path):
@@ -74,63 +76,115 @@ class TestRunner:
         self.repo_path = repo_path
         self.results_path = repo_path / "TestResults"
 
+    def _discover_test_projects(self) -> list[Path]:
+        """
+        Discover test projects by looking for .csproj files with xUnit references.
+
+        Returns:
+            List of test project paths
+        """
+        logger.info("[TEST] Discovering test projects...")
+
+        test_projects = []
+
+        # Find all .csproj files that might be test projects
+        for csproj in self.repo_path.glob("**/*.csproj"):
+            # Skip if in bin/obj directories
+            if "bin" in csproj.parts or "obj" in csproj.parts:
+                continue
+
+            # Check if it looks like a test project
+            csproj_name = csproj.stem.lower()
+            if "test" in csproj_name:
+                # Verify it has xUnit reference
+                try:
+                    content = csproj.read_text()
+                    if "xunit" in content.lower():
+                        test_projects.append(csproj)
+                        logger.info(f"[TEST]   ✓ {csproj.relative_to(self.repo_path)} (has xUnit)")
+                    else:
+                        logger.info(f"[TEST]   - {csproj.relative_to(self.repo_path)} (no xUnit reference)")
+                except Exception as e:
+                    logger.warning(f"[TEST]   ? {csproj.relative_to(self.repo_path)} (could not read: {e})")
+
+        logger.info(f"[TEST] Found {len(test_projects)} test projects with xUnit")
+        return test_projects
+
     def run_tests(
         self,
         project: str | None = None,
         filter_expr: str | None = None,
-        no_build: bool = False,  # Changed default to False - always build tests
+        no_build: bool = False,
         timeout: int = 600,
         collect_coverage: bool = False,
     ) -> TestRunResult:
         """
-        Run tests.
+        Run tests with full transparency logging.
 
         Args:
             project: Optional test project path
             filter_expr: Test filter expression
-            no_build: Skip build step (default False - always build to ensure tests exist)
+            no_build: Skip build step
             timeout: Timeout in seconds
             collect_coverage: Collect code coverage
 
         Returns:
             TestRunResult with execution details
         """
-        logger.info("[TEST] Running tests")
-        logger.info(f"[TEST] Working directory: {self.repo_path}")
+        logger.info("=" * 60)
+        logger.info("[TEST] STEP: TEST EXECUTION")
+        logger.info("=" * 60)
 
-        import time
         start_time = time.time()
 
-        # Try to find test projects
-        test_projects = list(self.repo_path.glob("**/tests/**/*.csproj")) + \
-                       list(self.repo_path.glob("**/*.Tests.csproj")) + \
-                       list(self.repo_path.glob("**/*Tests/*.csproj"))
-        logger.info(f"[TEST] Found {len(test_projects)} potential test projects")
-        for tp in test_projects[:5]:
-            logger.info(f"[TEST]   - {tp.relative_to(self.repo_path)}")
+        # Discover test projects
+        test_projects = self._discover_test_projects()
 
-        # Prepare command - use detailed verbosity to get more output
+        if not test_projects:
+            logger.warning("[TEST] No test projects found!")
+            logger.warning("[TEST] Searched for .csproj files with 'test' in name and xUnit reference")
+            return TestRunResult(
+                total=0,
+                passed=0,
+                failed=0,
+                skipped=0,
+                duration_seconds=0,
+                output="No test projects found",
+                success=True,  # Not a failure, just nothing to run
+            )
+
+        # Build command with detailed output
+        # Use console logger with detailed verbosity to capture all output
         cmd = [
             "dotnet", "test",
             "--logger", "trx",
             "--logger", "console;verbosity=detailed",
             "--results-directory", str(self.results_path),
-            "--verbosity", "normal",
+            "--verbosity", "detailed",  # Full MSBuild/test output
         ]
 
         if no_build:
             cmd.append("--no-build")
+            logger.info("[TEST] Skipping build (--no-build)")
+        else:
+            logger.info("[TEST] Will build test projects before running")
 
         if filter_expr:
             cmd.extend(["--filter", filter_expr])
+            logger.info(f"[TEST] Filter: {filter_expr}")
 
         if collect_coverage:
             cmd.extend(["--collect", "XPlat Code Coverage"])
+            logger.info("[TEST] Collecting code coverage")
 
         if project:
             cmd.append(project)
+            logger.info(f"[TEST] Project: {project}")
 
         logger.info(f"[TEST] Command: {' '.join(cmd)}")
+        logger.info(f"[TEST] Working directory: {self.repo_path}")
+        logger.info(f"[TEST] Timeout: {timeout}s")
+        logger.info("-" * 40)
 
         try:
             result = subprocess.run(
@@ -143,25 +197,32 @@ class TestRunner:
 
             duration = time.time() - start_time
 
-            # Capture both stdout and stderr
+            # Capture output
             stdout_output = result.stdout or ""
             stderr_output = result.stderr or ""
-            output = stdout_output + stderr_output
+            combined_output = stdout_output + stderr_output
 
-            logger.info(f"[TEST] dotnet test completed with return code: {result.returncode}")
-            logger.info(f"[TEST] stdout length: {len(stdout_output)} chars, stderr length: {len(stderr_output)} chars")
-            logger.info(f"[TEST] Total output length: {len(output)} chars")
+            logger.info(f"[TEST] Completed in {duration:.1f}s with exit code {result.returncode}")
 
-            # Log first 500 chars of output for debugging
-            if output:
-                logger.info(f"[TEST] Output start: {output[:500]}")
-            else:
-                logger.warning("[TEST] No output from dotnet test command!")
+            # Log full output for transparency
+            logger.info("[TEST] === BEGIN TEST OUTPUT ===")
+            for line in combined_output.split('\n'):
+                if line.strip():
+                    line_lower = line.lower()
+                    if 'error' in line_lower or 'failed' in line_lower:
+                        logger.error(f"[TEST] {line}")
+                    elif 'warning' in line_lower:
+                        logger.warning(f"[TEST] {line}")
+                    elif 'passed' in line_lower:
+                        logger.info(f"[TEST] {line}")
+                    else:
+                        logger.info(f"[TEST] {line}")
+            logger.info("[TEST] === END TEST OUTPUT ===")
 
             # Parse results from console output
-            test_result = self._parse_console_output(output)
+            test_result = self._parse_console_output(combined_output)
             test_result.duration_seconds = duration
-            test_result.output = output
+            test_result.output = combined_output
             test_result.success = result.returncode == 0
 
             # Try to get detailed results from TRX file
@@ -176,13 +237,38 @@ class TestRunner:
                     test_result.passed = len([t for t in trx_results if t.outcome == "Passed"])
                     test_result.failed = len([t for t in trx_results if t.outcome == "Failed"])
                     test_result.skipped = len([t for t in trx_results if t.outcome in ("Skipped", "NotExecuted")])
-                    logger.info(f"[TEST] Using TRX counts: Total={test_result.total}, Passed={test_result.passed}, Failed={test_result.failed}, Skipped={test_result.skipped}")
 
-            logger.info(f"[TEST] Final results: Total={test_result.total}, Passed={test_result.passed}, Failed={test_result.failed}, Skipped={test_result.skipped}")
+            # Summary
+            logger.info("-" * 40)
+            if test_result.success:
+                logger.info(f"[TEST] ✓ Tests PASSED")
+            else:
+                logger.error(f"[TEST] ✗ Tests FAILED")
+
+            logger.info(f"[TEST] Total: {test_result.total}")
+            logger.info(f"[TEST] Passed: {test_result.passed}")
+            logger.info(f"[TEST] Failed: {test_result.failed}")
+            logger.info(f"[TEST] Skipped: {test_result.skipped}")
+
+            if test_result.failed > 0 and test_result.failed_tests:
+                logger.error("[TEST] Failed tests:")
+                for test in test_result.failed_tests[:10]:
+                    logger.error(f"[TEST]   - {test.full_name}")
+                    if test.error_message:
+                        logger.error(f"[TEST]     Error: {test.error_message[:200]}")
+
+            if test_result.total == 0:
+                logger.warning("[TEST] No tests were discovered!")
+                logger.warning("[TEST] Possible causes:")
+                logger.warning("[TEST]   - Test files don't have [Fact] or [Theory] attributes")
+                logger.warning("[TEST]   - Test project missing xunit.runner.visualstudio package")
+                logger.warning("[TEST]   - Build failed (check Step 7 output)")
+                logger.warning("[TEST]   - Using statements are incorrect")
 
             return test_result
 
         except subprocess.TimeoutExpired:
+            logger.error(f"[TEST] ✗ Test run timed out after {timeout}s")
             return TestRunResult(
                 total=0,
                 passed=0,
@@ -193,6 +279,7 @@ class TestRunner:
                 success=False,
             )
         except Exception as e:
+            logger.error(f"[TEST] ✗ Test run failed: {e}")
             return TestRunResult(
                 total=0,
                 passed=0,
@@ -207,70 +294,45 @@ class TestRunner:
         """Parse test results from console output."""
         total = passed = failed = skipped = 0
 
-        logger.info(f"[TEST] Parsing test output ({len(output)} chars)")
-
         # Multiple patterns for different dotnet test output formats
-        # Format 1: "Total:     5" (with varying whitespace)
-        # Format 2: "Total tests: 5"
-        # Format 3: Summary line "Passed!  - Failed:     0, Passed:     5, Skipped:     0, Total:     5"
         patterns_list = [
-            # Standard format with possible extra whitespace
+            # Standard format
             {
                 "total": r"Total:\s+(\d+)",
                 "passed": r"Passed:\s+(\d+)",
                 "failed": r"Failed:\s+(\d+)",
                 "skipped": r"Skipped:\s+(\d+)",
             },
-            # Alternative format "Total tests: X"
+            # "Total tests: X" format
             {
                 "total": r"Total tests:\s*(\d+)",
                 "passed": r"Passed:\s*(\d+)",
                 "failed": r"Failed:\s*(\d+)",
                 "skipped": r"Skipped:\s*(\d+)",
             },
-            # Minimal whitespace format
-            {
-                "total": r"Total:\s*(\d+)",
-                "passed": r"Passed:\s*(\d+)",
-                "failed": r"Failed:\s*(\d+)",
-                "skipped": r"Skipped:\s*(\d+)",
-            },
         ]
 
-        # Try each pattern set
         for patterns in patterns_list:
-            matches_found = 0
-            temp_values = {"total": 0, "passed": 0, "failed": 0, "skipped": 0}
+            temp = {"total": 0, "passed": 0, "failed": 0, "skipped": 0}
 
             for key, pattern in patterns.items():
                 match = re.search(pattern, output, re.IGNORECASE)
                 if match:
-                    temp_values[key] = int(match.group(1))
-                    matches_found += 1
-                    logger.debug(f"[TEST] Found {key}: {temp_values[key]} (pattern: {pattern})")
+                    temp[key] = int(match.group(1))
 
-            # If we found at least total or passed, use these results
-            if matches_found >= 1 and (temp_values["total"] > 0 or temp_values["passed"] > 0):
-                total = temp_values["total"]
-                passed = temp_values["passed"]
-                failed = temp_values["failed"]
-                skipped = temp_values["skipped"]
+            if temp["total"] > 0 or temp["passed"] > 0:
+                total, passed, failed, skipped = temp["total"], temp["passed"], temp["failed"], temp["skipped"]
                 logger.info(f"[TEST] Parsed from console: Total={total}, Passed={passed}, Failed={failed}, Skipped={skipped}")
                 break
 
-        # If console parsing failed, try to count test result lines
+        # Fallback: count test result lines
         if total == 0:
-            # Count "Passed" and "Failed" test lines (e.g., "Passed TestName [1ms]")
             passed_count = len(re.findall(r"^\s*Passed\s+\S+", output, re.MULTILINE))
             failed_count = len(re.findall(r"^\s*Failed\s+\S+", output, re.MULTILINE))
             if passed_count > 0 or failed_count > 0:
-                passed = passed_count
-                failed = failed_count
+                passed, failed = passed_count, failed_count
                 total = passed + failed
-                logger.info(f"[TEST] Counted from test lines: Total={total}, Passed={passed}, Failed={failed}")
-
-        if total == 0:
-            logger.warning(f"[TEST] Could not parse test results. Output preview: {output[:500]}")
+                logger.info(f"[TEST] Counted from lines: Total={total}, Passed={passed}, Failed={failed}")
 
         return TestRunResult(
             total=total,
@@ -283,49 +345,43 @@ class TestRunner:
     def _parse_trx_results(self) -> list[TestCaseResult] | None:
         """Parse detailed results from TRX file."""
         if not self.results_path.exists():
+            logger.info("[TEST] No TestResults directory found")
             return None
 
-        # Find most recent TRX file
         trx_files = list(self.results_path.glob("*.trx"))
         if not trx_files:
+            logger.info("[TEST] No TRX files found")
             return None
 
         trx_file = max(trx_files, key=lambda p: p.stat().st_mtime)
+        logger.info(f"[TEST] Parsing TRX file: {trx_file.name}")
 
         try:
             tree = ET.parse(trx_file)
             root = tree.getroot()
 
-            # Handle namespace
             ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
-
             results = []
 
             for result in root.findall(".//t:UnitTestResult", ns):
                 outcome = result.get("outcome", "NotExecuted")
                 duration_str = result.get("duration", "0:0:0.0")
 
-                # Parse duration
                 try:
                     parts = duration_str.split(":")
-                    hours = int(parts[0])
-                    minutes = int(parts[1])
+                    hours, minutes = int(parts[0]), int(parts[1])
                     seconds = float(parts[2])
                     duration_ms = (hours * 3600 + minutes * 60 + seconds) * 1000
                 except Exception:
                     duration_ms = 0
 
-                # Get test name
                 test_name = result.get("testName", "Unknown")
                 class_name = ""
                 if "." in test_name:
                     parts = test_name.rsplit(".", 1)
-                    class_name = parts[0]
-                    test_name = parts[1]
+                    class_name, test_name = parts[0], parts[1]
 
-                # Get error info if failed
-                error_message = None
-                stack_trace = None
+                error_message = stack_trace = None
                 output_elem = result.find("t:Output", ns)
                 if output_elem is not None:
                     error_info = output_elem.find("t:ErrorInfo", ns)
@@ -349,39 +405,23 @@ class TestRunner:
             return results
 
         except Exception as e:
-            logger.warning(f"Failed to parse TRX file: {e}")
+            logger.warning(f"[TEST] Failed to parse TRX file: {e}")
             return None
 
     def get_failed_test_details(self, result: TestRunResult) -> list[dict]:
-        """
-        Get detailed information about failed tests.
-
-        Args:
-            result: Test run result
-
-        Returns:
-            List of failure details
-        """
-        failures = []
-        for test in result.failed_tests:
-            failures.append({
+        """Get detailed information about failed tests."""
+        return [
+            {
                 "name": test.full_name,
                 "error": test.error_message or "Unknown error",
                 "stack_trace": test.stack_trace,
                 "duration_ms": test.duration_ms,
-            })
-        return failures
+            }
+            for test in result.failed_tests
+        ]
 
     def get_summary(self, result: TestRunResult) -> dict:
-        """
-        Get test run summary.
-
-        Args:
-            result: Test run result
-
-        Returns:
-            Summary dictionary
-        """
+        """Get test run summary."""
         return {
             "total": result.total,
             "passed": result.passed,

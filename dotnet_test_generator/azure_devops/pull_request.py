@@ -29,51 +29,172 @@ class FileChange:
     original_path: str | None = None  # For renames
 
     @property
+    def normalized_path(self) -> str:
+        """Get normalized path with forward slashes and no leading slash."""
+        return self.path.replace("\\", "/").lstrip("/").lower()
+
+    @property
     def is_source_file(self) -> bool:
-        """Check if this is a source file under /src."""
-        return self.path.startswith("src/") or "/src/" in self.path
+        """Check if this is a source file (not a test file)."""
+        norm = self.normalized_path
+
+        # First check if it's a test file - if so, it's not a source file
+        if self.is_test_file:
+            return False
+
+        # Check for src/ at start or /src/ anywhere
+        if norm.startswith("src/") or "/src/" in norm:
+            return True
+
+        # Check for DDD project naming patterns at root level
+        # e.g., ProjectName.Domain/, ProjectName.Application/, ProjectName.Infrastructure/
+        ddd_patterns = ['.domain/', '.application/', '.infrastructure/', '.api/', '.web/', '.core/', '.shared/', '.common/']
+        for pattern in ddd_patterns:
+            if pattern in norm:
+                return True
+
+        # Also match if path starts with a project-like folder (contains a dot before the first slash)
+        # e.g., "SurveyMgmt.Domain/Entities/..." or "MyApp.Core/Services/..."
+        first_segment = norm.split('/')[0] if '/' in norm else norm
+        if '.' in first_segment and not first_segment.endswith('.cs'):
+            # It's a dotted folder name like "SurveyMgmt.Domain"
+            return True
+
+        return False
 
     @property
     def is_test_file(self) -> bool:
-        """Check if this is a test file under /tests."""
-        return self.path.startswith("tests/") or "/tests/" in self.path
+        """Check if this is a test file under /tests or in a .Tests project."""
+        norm = self.normalized_path
+        # Check for tests/ folder
+        if norm.startswith("tests/") or "/tests/" in norm:
+            return True
+        # Check for .Tests or .Test project naming
+        if ".tests/" in norm or ".test/" in norm:
+            return True
+        return False
 
     @property
     def is_csharp_file(self) -> bool:
         """Check if this is a C# file."""
         return self.path.endswith(".cs")
 
-    def get_corresponding_test_path(self) -> str | None:
+    def get_corresponding_test_path(self, repo_path: Path | None = None) -> str | None:
         """
         Get the corresponding test file path for a source file.
 
-        Assumes convention: src/Project/File.cs -> tests/Project.Tests/FileTests.cs
+        Discovers existing test projects by scanning for .csproj files,
+        then maps source files to matching test projects.
+
+        Args:
+            repo_path: Optional path to repo root for detecting existing test projects
         """
         if not self.is_source_file or not self.is_csharp_file:
             return None
 
-        # Convert src path to tests path
-        # Example: src/MyProject/Services/UserService.cs
-        #       -> tests/MyProject.Tests/Services/UserServiceTests.cs
         path_parts = self.path.replace("\\", "/").split("/")
 
-        try:
-            src_index = path_parts.index("src")
-            if src_index + 1 >= len(path_parts):
-                return None
+        if len(path_parts) >= 2:
+            project_name = path_parts[0]  # e.g., "SurveyMgmt.Domain"
+            remaining_path = "/".join(path_parts[1:])  # e.g., "Entities/File.cs"
 
-            project_name = path_parts[src_index + 1]
-            remaining_path = "/".join(path_parts[src_index + 2 :])
-
-            # Add Tests suffix to filename
             if remaining_path.endswith(".cs"):
                 remaining_path = remaining_path[:-3] + "Tests.cs"
 
-            test_path = f"tests/{project_name}.Tests/{remaining_path}"
-            return test_path
+            # Find existing test project (returns full path from repo root)
+            test_project_path = self._find_existing_test_project(project_name, repo_path)
 
-        except (ValueError, IndexError):
+            if test_project_path:
+                return f"{test_project_path}/{remaining_path}"
+
+        return None
+
+    def _find_existing_test_project(self, source_project: str, repo_path: Path | None) -> str | None:
+        """
+        Find existing test project for a source project by scanning for .csproj files.
+
+        Scans repo root for test projects (folders containing .csproj with 'test' in name),
+        then matches based on layer name (domain, application, etc.)
+
+        Args:
+            source_project: Source project name (e.g., "SurveyMgmt.Domain")
+            repo_path: Path to repo root
+
+        Returns:
+            Path to test project folder (e.g., "DomainTests") or None
+        """
+        source_lower = source_project.lower()
+
+        # Common layer names to match
+        layer_names = ['domain', 'application', 'infrastructure', 'api', 'web', 'core', 'shared', 'common']
+
+        if not repo_path:
             return None
+
+        # First, discover all test projects by scanning for .csproj files
+        test_projects = self._discover_test_projects(repo_path)
+
+        if not test_projects:
+            logger.warning(f"[PATH] No test projects found in repo")
+            return None
+
+        logger.info(f"[PATH] Discovered test projects: {list(test_projects.keys())}")
+
+        # Find which layer this source belongs to
+        for layer in layer_names:
+            if layer in source_lower:
+                # Find test project containing this layer name
+                for project_name, project_path in test_projects.items():
+                    if layer in project_name.lower():
+                        logger.info(f"[PATH] Matched source '{source_project}' (layer: {layer}) -> test project '{project_name}'")
+                        return project_path
+                break
+
+        # No match found
+        logger.warning(f"[PATH] No matching test project found for '{source_project}'")
+        return None
+
+    def _discover_test_projects(self, repo_path: Path) -> dict[str, str]:
+        """
+        Discover test projects by scanning for .csproj files containing 'test'.
+
+        Args:
+            repo_path: Path to repo root
+
+        Returns:
+            Dict mapping project name to relative path (e.g., {"DomainTests": "DomainTests"})
+        """
+        test_projects = {}
+
+        try:
+            # Scan repo root and one level deep for test .csproj files
+            for item in repo_path.iterdir():
+                if item.is_dir():
+                    # Check if this folder contains a test .csproj
+                    for csproj in item.glob("*.csproj"):
+                        if "test" in csproj.stem.lower():
+                            # Get relative path from repo root
+                            rel_path = str(item.relative_to(repo_path)).replace("\\", "/")
+                            test_projects[item.name] = rel_path
+                            logger.debug(f"[PATH] Found test project: {item.name} at {rel_path}")
+                            break
+
+            # Also check tests/ folder if it exists
+            tests_dir = repo_path / "tests"
+            if tests_dir.exists() and tests_dir.is_dir():
+                for item in tests_dir.iterdir():
+                    if item.is_dir():
+                        for csproj in item.glob("*.csproj"):
+                            if "test" in csproj.stem.lower():
+                                rel_path = str(item.relative_to(repo_path)).replace("\\", "/")
+                                test_projects[item.name] = rel_path
+                                logger.debug(f"[PATH] Found test project: {item.name} at {rel_path}")
+                                break
+
+        except Exception as e:
+            logger.error(f"[PATH] Error discovering test projects: {e}")
+
+        return test_projects
 
 
 @dataclass
@@ -165,12 +286,18 @@ class PullRequestManager:
         # Get changes
         changes_data = self.client.get_pull_request_changes(repo_info.id, pull_request_id)
 
+        logger.info(f"[PR] Raw changes data from API: {len(changes_data)} items")
+
         changes = []
         for change in changes_data:
             item = change.get("item", {})
-            path = item.get("path", "").lstrip("/")
+            raw_path = item.get("path", "")
+            path = raw_path.lstrip("/")
+
+            logger.info(f"[PR] API change: raw_path='{raw_path}' -> path='{path}', changeType={change.get('changeType')}")
 
             if not path:
+                logger.warning(f"[PR] Empty path, skipping: {change}")
                 continue
 
             change_type = self._map_change_type(change.get("changeType", "edit"))

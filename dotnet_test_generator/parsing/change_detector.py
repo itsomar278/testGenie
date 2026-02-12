@@ -126,6 +126,18 @@ class ChangeDetector:
                 test_changes.append(change)
                 continue
 
+            # Skip layers we don't unit test (Api, Infrastructure)
+            if change.is_skipped_layer:
+                logger.info(f"[CHANGE]   -> Skipped layer (Api/Infrastructure): {change.path}")
+                other_changes.append(change)
+                continue
+
+            # Skip non-testable files (migrations, designer, global usings, etc.)
+            if change.is_non_testable_file:
+                logger.info(f"[CHANGE]   -> Non-testable file: {change.path}")
+                other_changes.append(change)
+                continue
+
             if change.is_source_file:
                 logger.info(f"[CHANGE]   -> SOURCE FILE DETECTED: {change.path}")
                 context = self._build_change_context(change, target)
@@ -239,24 +251,19 @@ class ChangeDetector:
 
     def suggest_test_project_path(self, source_path: str) -> str | None:
         """
-        Suggest the test project path for a source file.
+        Suggest the test project path for a source file by scanning for .csproj files.
 
         Args:
             source_path: Source file path
 
         Returns:
-            Suggested test project directory
+            Suggested test project directory or None
         """
-        parts = source_path.replace("\\", "/").split("/")
-
-        try:
-            src_index = parts.index("src")
-            if src_index + 1 < len(parts):
-                project_name = parts[src_index + 1]
-                return f"tests/{project_name}.Tests"
-        except ValueError:
-            pass
-
+        change = FileChange(path=source_path, change_type=ChangeType.EDIT)
+        test_path = change.get_corresponding_test_path(self.repo_path)
+        if test_path:
+            # Return just the project directory part (first segment of test path)
+            return test_path.split("/")[0] if "/" in test_path else test_path
         return None
 
     def ensure_test_directory_exists(self, test_path: str) -> Path:

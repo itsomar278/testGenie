@@ -34,21 +34,54 @@ class FileChange:
         return self.path.replace("\\", "/").lstrip("/").lower()
 
     @property
+    def is_skipped_layer(self) -> bool:
+        """Check if this file belongs to a layer we skip for unit testing (Api, Infrastructure)."""
+        norm = self.normalized_path
+        skip_patterns = ['.infrastructure/', '.api/']
+        return any(pattern in norm for pattern in skip_patterns)
+
+    @property
+    def is_non_testable_file(self) -> bool:
+        """Check if this file type should be excluded from test generation."""
+        norm = self.normalized_path
+        name = norm.split('/')[-1] if '/' in norm else norm
+
+        # Files that are never unit tested
+        skip_names = ['globalusings.cs', 'global.cs', 'assemblyinfo.cs', 'program.cs', 'startup.cs']
+        if name in skip_names:
+            return True
+
+        # Auto-generated / designer files
+        skip_suffixes = ['.designer.cs', '.generated.cs', '.g.cs', '.g.i.cs']
+        if any(name.endswith(s) for s in skip_suffixes):
+            return True
+
+        # EF Core migrations folder
+        if '/migrations/' in norm:
+            return True
+
+        return False
+
+    @property
     def is_source_file(self) -> bool:
-        """Check if this is a source file (not a test file)."""
+        """Check if this is a testable source file."""
         norm = self.normalized_path
 
-        # First check if it's a test file - if so, it's not a source file
+        # Exclusions first
         if self.is_test_file:
+            return False
+        if self.is_skipped_layer:
+            return False
+        if self.is_non_testable_file:
             return False
 
         # Check for src/ at start or /src/ anywhere
         if norm.startswith("src/") or "/src/" in norm:
             return True
 
-        # Check for DDD project naming patterns at root level
-        # e.g., ProjectName.Domain/, ProjectName.Application/, ProjectName.Infrastructure/
-        ddd_patterns = ['.domain/', '.application/', '.infrastructure/', '.api/', '.web/', '.core/', '.shared/', '.common/']
+        # Check for DDD project naming patterns
+        # e.g., ProjectName.Domain/, ProjectName.Application/
+        ddd_patterns = ['.domain/', '.application/', '.web/', '.core/', '.shared/', '.common/']
         for pattern in ddd_patterns:
             if pattern in norm:
                 return True
@@ -57,7 +90,6 @@ class FileChange:
         # e.g., "SurveyMgmt.Domain/Entities/..." or "MyApp.Core/Services/..."
         first_segment = norm.split('/')[0] if '/' in norm else norm
         if '.' in first_segment and not first_segment.endswith('.cs'):
-            # It's a dotted folder name like "SurveyMgmt.Domain"
             return True
 
         return False
@@ -94,6 +126,11 @@ class FileChange:
 
         path_parts = self.path.replace("\\", "/").split("/")
 
+        # Handle src/ prefix: strip it to get the real project name
+        # e.g., "src/MyApp.Domain/Entities/File.cs" → project_name = "MyApp.Domain"
+        if path_parts[0].lower() == "src" and len(path_parts) >= 3:
+            path_parts = path_parts[1:]
+
         if len(path_parts) >= 2:
             project_name = path_parts[0]  # e.g., "SurveyMgmt.Domain"
             remaining_path = "/".join(path_parts[1:])  # e.g., "Entities/File.cs"
@@ -113,25 +150,25 @@ class FileChange:
         """
         Find existing test project for a source project by scanning for .csproj files.
 
-        Scans repo root for test projects (folders containing .csproj with 'test' in name),
-        then matches based on layer name (domain, application, etc.)
+        Uses exact layer suffix matching (e.g., "MyApp.Domain" matches layer "domain")
+        and finds the corresponding test project (e.g., "MyApp.Domain.Tests").
 
         Args:
             source_project: Source project name (e.g., "SurveyMgmt.Domain")
             repo_path: Path to repo root
 
         Returns:
-            Path to test project folder (e.g., "DomainTests") or None
+            Path to test project folder (e.g., "SurveyMgmt.Domain.Tests") or None
         """
         source_lower = source_project.lower()
 
-        # Common layer names to match
-        layer_names = ['domain', 'application', 'infrastructure', 'api', 'web', 'core', 'shared', 'common']
+        # Only layers we write unit tests for
+        testable_layers = ['domain', 'application']
 
         if not repo_path:
             return None
 
-        # First, discover all test projects by scanning for .csproj files
+        # Discover all test projects by scanning for .csproj files recursively
         test_projects = self._discover_test_projects(repo_path)
 
         if not test_projects:
@@ -140,14 +177,17 @@ class FileChange:
 
         logger.info(f"[PATH] Discovered test projects: {list(test_projects.keys())}")
 
-        # Find which layer this source belongs to
-        for layer in layer_names:
-            if layer in source_lower:
-                # Find test project containing this layer name
+        # Find which testable layer this source belongs to (exact suffix match)
+        for layer in testable_layers:
+            if source_lower.endswith(f".{layer}"):
+                # Find test project matching this layer
                 for project_name, project_path in test_projects.items():
-                    if layer in project_name.lower():
+                    project_lower = project_name.lower()
+                    # Match: "MyApp.Domain.Tests" or "DomainTests"
+                    if f".{layer}.tests" in project_lower or project_lower == f"{layer}tests":
                         logger.info(f"[PATH] Matched source '{source_project}' (layer: {layer}) -> test project '{project_name}'")
                         return project_path
+                logger.warning(f"[PATH] Source '{source_project}' is {layer} layer but no test project found")
                 break
 
         # No match found
@@ -156,40 +196,31 @@ class FileChange:
 
     def _discover_test_projects(self, repo_path: Path) -> dict[str, str]:
         """
-        Discover test projects by scanning for .csproj files containing 'test'.
+        Discover test projects by recursively scanning for .csproj files containing 'test'.
+
+        Uses .rglob() to find test projects at any depth, supporting all folder layouts
+        (root-level, src/tests, nested).
 
         Args:
             repo_path: Path to repo root
 
         Returns:
-            Dict mapping project name to relative path (e.g., {"DomainTests": "DomainTests"})
+            Dict mapping project folder name to relative path
         """
         test_projects = {}
 
         try:
-            # Scan repo root and one level deep for test .csproj files
-            for item in repo_path.iterdir():
-                if item.is_dir():
-                    # Check if this folder contains a test .csproj
-                    for csproj in item.glob("*.csproj"):
-                        if "test" in csproj.stem.lower():
-                            # Get relative path from repo root
-                            rel_path = str(item.relative_to(repo_path)).replace("\\", "/")
-                            test_projects[item.name] = rel_path
-                            logger.debug(f"[PATH] Found test project: {item.name} at {rel_path}")
-                            break
+            for csproj in repo_path.rglob("*.csproj"):
+                # Skip build artifacts
+                rel_str = str(csproj.relative_to(repo_path)).replace("\\", "/").lower()
+                if any(skip in rel_str for skip in ['bin/', 'obj/', 'packages/', 'node_modules/']):
+                    continue
 
-            # Also check tests/ folder if it exists
-            tests_dir = repo_path / "tests"
-            if tests_dir.exists() and tests_dir.is_dir():
-                for item in tests_dir.iterdir():
-                    if item.is_dir():
-                        for csproj in item.glob("*.csproj"):
-                            if "test" in csproj.stem.lower():
-                                rel_path = str(item.relative_to(repo_path)).replace("\\", "/")
-                                test_projects[item.name] = rel_path
-                                logger.debug(f"[PATH] Found test project: {item.name} at {rel_path}")
-                                break
+                if "test" in csproj.stem.lower():
+                    project_dir = csproj.parent
+                    rel_path = str(project_dir.relative_to(repo_path)).replace("\\", "/")
+                    test_projects[project_dir.name] = rel_path
+                    logger.debug(f"[PATH] Found test project: {project_dir.name} at {rel_path}")
 
         except Exception as e:
             logger.error(f"[PATH] Error discovering test projects: {e}")

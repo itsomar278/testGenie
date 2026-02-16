@@ -153,14 +153,12 @@ class TestRunner:
                 success=True,  # Not a failure, just nothing to run
             )
 
-        # Build command with detailed output
-        # Use console logger with detailed verbosity to capture all output
         cmd = [
             "dotnet", "test",
             "--logger", "trx",
-            "--logger", "console;verbosity=detailed",
+            "--logger", "console;verbosity=normal",
             "--results-directory", str(self.results_path),
-            "--verbosity", "detailed",  # Full MSBuild/test output
+            "--verbosity", "minimal",
         ]
 
         if no_build:

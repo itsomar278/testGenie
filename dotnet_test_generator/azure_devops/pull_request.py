@@ -34,11 +34,23 @@ class FileChange:
         return self.path.replace("\\", "/").lstrip("/").lower()
 
     @property
+    def _project_segment(self) -> str:
+        """Get the first meaningful project/layer segment (after stripping src/ if present)."""
+        parts = self.normalized_path.split('/')
+        if parts[0] == 'src' and len(parts) > 1:
+            return parts[1]
+        return parts[0]
+
+    @property
     def is_skipped_layer(self) -> bool:
         """Check if this file belongs to a layer we skip for unit testing (Api, Infrastructure)."""
         norm = self.normalized_path
+        # Dotted project names: SolutionName.Infrastructure/, SolutionName.Api/
         skip_patterns = ['.infrastructure/', '.api/']
-        return any(pattern in norm for pattern in skip_patterns)
+        if any(pattern in norm for pattern in skip_patterns):
+            return True
+        # Bare folder names: Infrastructure/, Api/, src/Infrastructure/, src/Api/
+        return self._project_segment in ('infrastructure', 'api')
 
     @property
     def is_non_testable_file(self) -> bool:
@@ -90,6 +102,11 @@ class FileChange:
         # e.g., "SurveyMgmt.Domain/Entities/..." or "MyApp.Core/Services/..."
         first_segment = norm.split('/')[0] if '/' in norm else norm
         if '.' in first_segment and not first_segment.endswith('.cs'):
+            return True
+
+        # Bare DDD layer folder names: Application/, Domain/
+        # (or src/Application/, src/Domain/)
+        if self._project_segment in ('domain', 'application'):
             return True
 
         return False
@@ -177,9 +194,10 @@ class FileChange:
 
         logger.info(f"[PATH] Discovered test projects: {list(test_projects.keys())}")
 
-        # Find which testable layer this source belongs to (exact suffix match)
+        # Find which testable layer this source belongs to
+        # Matches both dotted names ("MyApp.Domain") and bare folder names ("Domain")
         for layer in testable_layers:
-            if source_lower.endswith(f".{layer}"):
+            if source_lower.endswith(f".{layer}") or source_lower == layer:
                 # Find test project matching this layer
                 for project_name, project_path in test_projects.items():
                     project_lower = project_name.lower()

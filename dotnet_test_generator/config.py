@@ -77,6 +77,10 @@ class WorkflowSettings(BaseSettings):
         default=False,
         description="Process changed files in parallel (experimental)",
     )
+    only_build: bool = Field(
+        default=False,
+        description="Skip test generation and only verify the build",
+    )
 
 
 class LoggingSettings(BaseSettings):

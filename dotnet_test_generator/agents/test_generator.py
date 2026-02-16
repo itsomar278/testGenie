@@ -63,7 +63,7 @@ class TestGeneratorAgent(BaseAgent):
         if config is None:
             config = AgentConfig(
                 name="TestGenerator",
-                max_iterations=15,  # Enough iterations to write tests but not loop forever
+                max_iterations=35,  # Enough iterations to write tests but not loop forever
                 max_context_tokens=75000,
             )
 
@@ -149,22 +149,37 @@ class TestGeneratorAgent(BaseAgent):
             )
 
     def _is_task_complete(self, response: ChatResponse) -> bool:
-        """Check if test generation is complete."""
-        # Check if test file exists and has content
+        """Check if test generation is complete.
+
+        We only consider the task complete if write_file was actually called
+        (i.e., the agent wrote new content). Just reading the existing test
+        file is not enough.
+        """
+        # Check that the agent actually called write_file
+        wrote_file = False
+        for msg in self.state.messages:
+            if msg.tool_calls:
+                for tc in msg.tool_calls:
+                    fn = tc.get("function", {})
+                    if fn.get("name") == "write_file":
+                        wrote_file = True
+                        break
+
+        if not wrote_file:
+            return False
+
+        # Verify the test file exists and has test methods
         if self._test_path:
             test_file = self.repo_path / self._test_path
             if test_file.exists():
                 try:
                     content = test_file.read_text()
-                    # If file has [Fact] or [Theory], tests were written
                     if "[Fact]" in content or "[Theory]" in content:
-                        logger.info(f"[TESTGEN] Task complete - test file exists with test methods")
+                        logger.info("[TESTGEN] Task complete - write_file called and test file has test methods")
                         return True
                 except Exception:
                     pass
 
-        # Only mark complete based on file existence, not response content
-        # Response content markers are too unreliable
         return False
 
     def _get_continuation_prompt(self, response: ChatResponse) -> str | None:

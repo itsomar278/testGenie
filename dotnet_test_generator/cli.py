@@ -123,6 +123,12 @@ def main():
     is_flag=True,
     help="Enable verbose output",
 )
+@click.option(
+    "--only-build",
+    is_flag=True,
+    envvar="ONLY_BUILD",
+    help="Skip test generation and only verify the build",
+)
 def generate(
     repository_url: str,
     pull_request_id: int,
@@ -134,6 +140,7 @@ def generate(
     work_dir: str,
     max_iterations: int,
     verbose: bool,
+    only_build: bool,
 ):
     """
     Generate tests for a pull request.
@@ -157,6 +164,7 @@ def generate(
         workflow=WorkflowSettings(
             work_directory=Path(work_dir),
             max_build_fix_iterations=max_iterations,
+            only_build=only_build,
         ),
         logging=LoggingSettings(
             level="DEBUG" if verbose else "INFO",
@@ -167,7 +175,10 @@ def generate(
 
     console.print(f"\n[bold]Repository:[/bold] {repository_url}")
     console.print(f"[bold]Pull Request:[/bold] #{pull_request_id}")
-    console.print(f"[bold]Model:[/bold] {model}\n")
+    if only_build:
+        console.print("[bold yellow]Mode:[/bold yellow] Build only (test generation skipped)\n")
+    else:
+        console.print(f"[bold]Model:[/bold] {model}\n")
 
     # Run workflow
     with Progress(
@@ -175,7 +186,8 @@ def generate(
         TextColumn("[progress.description]{task.description}"),
         console=console,
     ) as progress:
-        task = progress.add_task("Running test generation workflow...", total=None)
+        description = "Running build verification..." if only_build else "Running test generation workflow..."
+        task = progress.add_task(description, total=None)
 
         workflow = TestGenerationWorkflow(settings)
         result = workflow.run(repository_url, pull_request_id)

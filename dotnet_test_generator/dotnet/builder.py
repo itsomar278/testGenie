@@ -277,33 +277,37 @@ class SolutionBuilder:
             logger.error(f"[DOTNET] Command failed: {e}")
             raise
 
-    def _ensure_global_nuget_config(self, feed_url: str, pat: str) -> None:
-        """Ensure global NuGet.Config exists with authenticated internal feed.
+    def _generate_repo_nuget_config(self, feed_url: str, pat: str) -> None:
+        """Generate a fresh NuGet.Config in the repo root with authenticated feed.
 
-        Creates/updates ~/.nuget/NuGet/NuGet.Config so dotnet restore can
-        authenticate with the private Azure DevOps feed regardless of
-        repo-level config files.
+        This is called on every run to ensure the PAT is always current.
+        Writes to the repo directory (not ~/.nuget/) to avoid Docker mount conflicts.
+
+        If the repo already has a NuGet.config, we update it with credentials.
+        If not, we create a new one.
         """
         import xml.etree.ElementTree as ET
 
-        global_config_dir = Path.home() / ".nuget" / "NuGet"
-        global_config_path = global_config_dir / "NuGet.Config"
+        logger.info("[NUGET] Generating repo-level NuGet.Config with authenticated feed")
+        logger.info(f"[NUGET]   Feed URL: {feed_url}")
+        logger.info(f"[NUGET]   PAT: {'*' * 8}...{pat[-4:] if len(pat) > 4 else '****'}")
 
-        logger.info(f"[NUGET] Ensuring global NuGet.Config at {global_config_path}")
+        # Find existing NuGet.config in repo (case-insensitive)
+        existing_configs = list(self.repo_path.glob("[Nn]u[Gg]et.[Cc]onfig"))
 
-        # Create directory if needed
-        global_config_dir.mkdir(parents=True, exist_ok=True)
-
-        # Parse existing or create new
-        if global_config_path.exists():
+        if existing_configs:
+            config_path = existing_configs[0]
+            logger.info(f"[NUGET] Found existing config: {config_path.name}")
             try:
-                tree = ET.parse(global_config_path)
+                tree = ET.parse(config_path)
                 root = tree.getroot()
-            except ET.ParseError:
-                logger.warning("[NUGET] Failed to parse existing global config, recreating")
+            except ET.ParseError as e:
+                logger.warning(f"[NUGET] Failed to parse existing config: {e}, creating fresh one")
                 root = ET.Element("configuration")
                 tree = ET.ElementTree(root)
         else:
+            config_path = self.repo_path / "NuGet.Config"
+            logger.info(f"[NUGET] No existing config found, creating {config_path.name}")
             root = ET.Element("configuration")
             tree = ET.ElementTree(root)
 
@@ -312,55 +316,70 @@ class SolutionBuilder:
         if sources is None:
             sources = ET.SubElement(root, "packageSources")
 
-        # Check existing sources
-        has_nuget_org = False
-        has_internal = False
-        for source in sources.findall("add"):
-            if source.get("key") == "nuget.org":
-                has_nuget_org = True
-            if source.get("key") == "InternalFeed":
-                has_internal = True
-                source.set("value", feed_url)
-
+        # Ensure nuget.org is present
+        has_nuget_org = any(
+            s.get("key", "").lower() == "nuget.org"
+            for s in sources.findall("add")
+        )
         if not has_nuget_org:
             nuget_source = ET.SubElement(sources, "add")
             nuget_source.set("key", "nuget.org")
             nuget_source.set("value", "https://api.nuget.org/v3/index.json")
 
-        if not has_internal:
+        # Find all source keys that point to internal feeds (by URL pattern)
+        internal_source_keys = []
+        for source in sources.findall("add"):
+            value = source.get("value", "")
+            if "devops.malaffi.ae" in value or "_packaging" in value:
+                internal_source_keys.append(source.get("key", ""))
+                # Update URL to current feed URL
+                source.set("value", feed_url)
+
+        # If no internal source found, add one
+        if not internal_source_keys:
             internal_source = ET.SubElement(sources, "add")
             internal_source.set("key", "InternalFeed")
             internal_source.set("value", feed_url)
+            internal_source_keys.append("InternalFeed")
 
         # Ensure packageSourceCredentials section
-        creds = root.find("packageSourceCredentials")
-        if creds is None:
-            creds = ET.SubElement(root, "packageSourceCredentials")
+        creds_section = root.find("packageSourceCredentials")
+        if creds_section is None:
+            creds_section = ET.SubElement(root, "packageSourceCredentials")
 
-        # Replace existing InternalFeed credentials
-        existing_creds = creds.find("InternalFeed")
-        if existing_creds is not None:
-            creds.remove(existing_creds)
+        # Add/update credentials for all internal feed sources
+        for source_key in internal_source_keys:
+            # XML element names can't have spaces — use safe name
+            safe_key = source_key.replace(" ", "_").replace("-", "_")
 
-        internal_creds = ET.SubElement(creds, "InternalFeed")
-        username_elem = ET.SubElement(internal_creds, "add")
-        username_elem.set("key", "Username")
-        username_elem.set("value", "az")
-        password_elem = ET.SubElement(internal_creds, "add")
-        password_elem.set("key", "ClearTextPassword")
-        password_elem.set("value", pat)
+            # Remove existing creds for this source
+            existing = creds_section.find(safe_key)
+            if existing is not None:
+                creds_section.remove(existing)
+
+            # Add fresh credentials
+            source_creds = ET.SubElement(creds_section, safe_key)
+            username_elem = ET.SubElement(source_creds, "add")
+            username_elem.set("key", "Username")
+            username_elem.set("value", "az")
+            password_elem = ET.SubElement(source_creds, "add")
+            password_elem.set("key", "ClearTextPassword")
+            password_elem.set("value", pat)
+
+            logger.info(f"[NUGET]   Added credentials for source: {source_key}")
 
         # Write the config
-        tree.write(global_config_path, encoding="utf-8", xml_declaration=True)
-        logger.info(f"[NUGET] ✓ Global NuGet.Config written with authenticated InternalFeed")
+        tree.write(config_path, encoding="utf-8", xml_declaration=True)
+        logger.info(f"[NUGET] Repo NuGet.Config written to {config_path}")
 
-        # Verify by listing sources
-        list_result = subprocess.run(
-            ["dotnet", "nuget", "list", "source"],
-            capture_output=True,
-            text=True,
-        )
-        logger.info(f"[NUGET] Global NuGet sources:\n{list_result.stdout}")
+        # Log final content for debugging
+        try:
+            content = config_path.read_text(encoding="utf-8")
+            # Mask the PAT in logs
+            masked = content.replace(pat, "****PAT****")
+            logger.info(f"[NUGET] Config content:\n{masked}")
+        except Exception:
+            pass
 
     def _test_network_connectivity(self) -> None:
         """
@@ -457,6 +476,13 @@ class SolutionBuilder:
         """
         Restore NuGet packages.
 
+        Dynamically generates a repo-level NuGet.Config with credentials from
+        environment variables on every run. No Docker volume mounts needed.
+
+        Auth is configured via:
+          AZURE_DEVOPS_PERSONAL_ACCESS_TOKEN — PAT for Azure DevOps feeds
+          NUGET_INTERNAL_FEED — URL of the private NuGet feed
+
         Args:
             project: Optional project/solution path
             timeout: Timeout in seconds
@@ -471,43 +497,44 @@ class SolutionBuilder:
         logger.info("[DOTNET] STEP: PACKAGE RESTORE")
         logger.info("=" * 60)
 
-        # Check for internal NuGet feed configuration
+        # Read auth from environment
         nuget_feed_url = os.environ.get("NUGET_INTERNAL_FEED", "")
         nuget_feed_pat = os.environ.get("AZURE_DEVOPS_PERSONAL_ACCESS_TOKEN", "")
 
-        # PRIMARY: Create global NuGet.Config with credentials
-        # This ensures ~/.nuget/NuGet/NuGet.Config has the authenticated feed
-        # so dotnet restore works regardless of repo-level config state
         if nuget_feed_url and nuget_feed_pat:
-            self._ensure_global_nuget_config(nuget_feed_url, nuget_feed_pat)
+            # PRIMARY: Generate a fresh repo-level NuGet.Config with credentials.
+            # This writes to the cloned repo directory (not ~/.nuget/) so there
+            # are zero Docker mount conflicts.
+            self._generate_repo_nuget_config(nuget_feed_url, nuget_feed_pat)
 
-        # SECONDARY: Set VSS_NUGET_EXTERNAL_FEED_ENDPOINTS for Azure Artifacts
-        # Credential Provider (if installed). Belt-and-suspenders approach.
-        if nuget_feed_url and nuget_feed_pat:
+            # SECONDARY: Set VSS_NUGET_EXTERNAL_FEED_ENDPOINTS for Azure Artifacts
+            # Credential Provider (if installed). Belt-and-suspenders approach.
             import json
             endpoints = {
                 "endpointCredentials": [
                     {
                         "endpoint": nuget_feed_url,
                         "username": "az",
-                        "password": nuget_feed_pat
+                        "password": nuget_feed_pat,
                     }
                 ]
             }
             os.environ["VSS_NUGET_EXTERNAL_FEED_ENDPOINTS"] = json.dumps(endpoints)
-            logger.info(f"[NUGET] Set VSS_NUGET_EXTERNAL_FEED_ENDPOINTS for Azure Artifacts auth")
+            logger.info("[NUGET] Set VSS_NUGET_EXTERNAL_FEED_ENDPOINTS for Azure Artifacts auth")
 
-        # TERTIARY: Also configure repo-level NuGet sources as fallback
-        if nuget_feed_url:
-            logger.info(f"[DOTNET] Internal NuGet feed configured")
+            # Also update any nested NuGet.config files in subdirectories
             self._configure_nuget_source(nuget_feed_url, nuget_feed_pat)
+
+        elif nuget_feed_url:
+            logger.warning("[NUGET] NUGET_INTERNAL_FEED set but no PAT provided — restore may fail for private packages")
+        else:
+            logger.info("[NUGET] No internal feed configured, using public NuGet.org only")
 
         # Find solution file if no project specified
         if not project:
             project = self._find_solution_file()
 
-        # Build command with detailed verbosity
-        cmd = ["dotnet", "restore", "--verbosity", "detailed", "--interactive", "false"]
+        cmd = ["dotnet", "restore", "--verbosity", "minimal", "--interactive", "false"]
         if project:
             cmd.append(project)
 
@@ -516,74 +543,49 @@ class SolutionBuilder:
                 cmd,
                 timeout=timeout,
                 description=f"Restoring packages for {project or 'all projects'}",
-                stream_output=True,  # Stream output in real-time to see progress
+                stream_output=True,
             )
 
             if result.returncode == 0:
-                logger.info("[DOTNET] ✓ Restore completed successfully")
+                logger.info("[DOTNET] Restore completed successfully")
                 return True
             else:
-                logger.error("[DOTNET] ✗ Restore FAILED")
+                logger.error("[DOTNET] Restore FAILED")
                 return False
 
         except subprocess.TimeoutExpired:
-            logger.error(f"[DOTNET] ✗ Restore timed out after {timeout}s")
+            logger.error(f"[DOTNET] Restore timed out after {timeout}s")
             return False
         except Exception as e:
-            logger.error(f"[DOTNET] ✗ Restore failed: {e}")
+            logger.error(f"[DOTNET] Restore failed: {e}")
             return False
 
     def _configure_nuget_source(self, feed_url: str, pat: str) -> None:
-        """Configure NuGet to use an internal feed with authentication.
+        """Update any nested NuGet.config files in subdirectories with credentials.
 
-        This method:
-        1. Finds existing NuGet.config in the repo
-        2. Adds credentials directly to it (repo config takes precedence)
-        3. Also adds as global source as fallback
+        The root-level config is handled by _generate_repo_nuget_config().
+        This method handles NuGet.config files in subdirectories (e.g., src/NuGet.config).
         """
         import xml.etree.ElementTree as ET
 
-        logger.info(f"[NUGET] Configuring authenticated NuGet source")
-        logger.info(f"[NUGET]   URL: {feed_url}")
-        logger.info(f"[NUGET]   Auth: {'PAT provided' if pat else 'No PAT!'}")
+        logger.info("[NUGET] Checking for nested NuGet.config files in subdirectories")
 
-        # Find NuGet.config files in repo
-        nuget_configs = list(self.repo_path.glob("**/[Nn]u[Gg]et.[Cc]onfig"))
-        logger.info(f"[NUGET] Found {len(nuget_configs)} NuGet.config files in repo")
+        # Find NuGet.config files in subdirectories only (root is already handled)
+        nested_configs = [
+            p for p in self.repo_path.rglob("[Nn]u[Gg]et.[Cc]onfig")
+            if p.parent != self.repo_path
+            and "bin" not in p.parts
+            and "obj" not in p.parts
+        ]
 
-        for config_path in nuget_configs:
+        if not nested_configs:
+            logger.info("[NUGET] No nested NuGet.config files found")
+            return
+
+        logger.info(f"[NUGET] Found {len(nested_configs)} nested NuGet.config files")
+        for config_path in nested_configs:
             logger.info(f"[NUGET]   - {config_path.relative_to(self.repo_path)}")
-
-        # Update each NuGet.config to add credentials
-        for config_path in nuget_configs:
             self._add_credentials_to_nuget_config(config_path, feed_url, pat)
-
-        # If no NuGet.config found, create one in repo root
-        if not nuget_configs:
-            self._create_nuget_config_with_credentials(feed_url, pat)
-
-        # Also add as global source (fallback)
-        logger.info(f"[NUGET] Adding global source as fallback...")
-        source_name = "InternalFeed"
-        subprocess.run(
-            ["dotnet", "nuget", "remove", "source", source_name],
-            cwd=self.repo_path,
-            capture_output=True,
-            text=True,
-        )
-        cmd = ["dotnet", "nuget", "add", "source", feed_url, "--name", source_name]
-        if pat:
-            cmd.extend(["--username", "az", "--password", pat, "--store-password-in-clear-text"])
-        subprocess.run(cmd, cwd=self.repo_path, capture_output=True, text=True)
-
-        # List sources to confirm
-        list_result = subprocess.run(
-            ["dotnet", "nuget", "list", "source"],
-            cwd=self.repo_path,
-            capture_output=True,
-            text=True,
-        )
-        logger.info(f"[NUGET] Final sources:\n{list_result.stdout}")
 
     def _add_credentials_to_nuget_config(self, config_path: Path, feed_url: str, pat: str) -> None:
         """Add credentials to an existing NuGet.config file."""
@@ -646,40 +648,6 @@ class SolutionBuilder:
         except Exception as e:
             logger.error(f"[NUGET]   ✗ Failed to update {config_path.name}: {e}")
 
-    def _create_nuget_config_with_credentials(self, feed_url: str, pat: str) -> None:
-        """Create a NuGet.config file with credentials in repo root."""
-        import xml.etree.ElementTree as ET
-
-        config_path = self.repo_path / "NuGet.config"
-        logger.info(f"[NUGET] Creating NuGet.config with credentials at repo root")
-
-        # Create the XML structure
-        root = ET.Element("configuration")
-
-        # Package sources
-        sources = ET.SubElement(root, "packageSources")
-        nuget_source = ET.SubElement(sources, "add")
-        nuget_source.set("key", "nuget.org")
-        nuget_source.set("value", "https://api.nuget.org/v3/index.json")
-        internal_source = ET.SubElement(sources, "add")
-        internal_source.set("key", "InternalFeed")
-        internal_source.set("value", feed_url)
-
-        # Credentials
-        creds = ET.SubElement(root, "packageSourceCredentials")
-        internal_creds = ET.SubElement(creds, "InternalFeed")
-        username = ET.SubElement(internal_creds, "add")
-        username.set("key", "Username")
-        username.set("value", "az")
-        password = ET.SubElement(internal_creds, "add")
-        password.set("key", "ClearTextPassword")
-        password.set("value", pat)
-
-        # Write the file
-        tree = ET.ElementTree(root)
-        tree.write(config_path, encoding="utf-8", xml_declaration=True)
-        logger.info(f"[NUGET] ✓ Created {config_path.name}")
-
     def build(
         self,
         project: str | None = None,
@@ -709,11 +677,10 @@ class SolutionBuilder:
 
         start_time = time.time()
 
-        # Build command with detailed verbosity for debugging
         cmd = [
             "dotnet", "build",
             "-c", configuration,
-            "--verbosity", "detailed",  # Full MSBuild output
+            "--verbosity", "minimal",
         ]
 
         if no_restore:

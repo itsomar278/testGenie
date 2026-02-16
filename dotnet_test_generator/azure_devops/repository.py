@@ -92,7 +92,7 @@ class RepositoryManager:
                 if git_index >= 2 and git_index + 1 < len(parts):
                     # collection/org is parts[0], project is parts[git_index-1], repo is parts[git_index+1]
                     org = parts[0]  # Collection name (e.g., ADHDS)
-                    project = parts[git_index - 1]  # Project name
+                    project = unquote(parts[git_index - 1])  # Project name (URL decoded)
                     repo = unquote(parts[git_index + 1])  # Repo name (URL decoded)
                     logger.info(f"[URL] Parsed internal ADO URL: org={org}, project={project}, repo={repo}")
                     return org, project, repo

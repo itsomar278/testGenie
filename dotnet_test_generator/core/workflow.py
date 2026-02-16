@@ -120,14 +120,19 @@ class TestGenerationWorkflow:
         Returns:
             WorkflowResult with outcome details
         """
+        import os
+
+        only_build = self.settings.workflow.only_build or os.environ.get("ONLY_BUILD", "").lower() in ("1", "true", "yes")
+
         logger.info("=" * 60)
-        logger.info("STARTING TEST GENERATION WORKFLOW")
+        logger.info("STARTING TEST GENERATION WORKFLOW" + (" (BUILD ONLY MODE)" if only_build else ""))
         logger.info("=" * 60)
         logger.info(f"Repository URL: {repository_url}")
         logger.info(f"Pull Request ID: #{pull_request_id}")
         logger.info(f"Work Directory: {self.settings.workflow.work_directory}")
-        logger.info(f"Ollama Model: {self.settings.ollama.model}")
-        logger.info(f"Ollama URL: {self.settings.ollama.base_url}")
+        if not only_build:
+            logger.info(f"Ollama Model: {self.settings.ollama.model}")
+            logger.info(f"Ollama URL: {self.settings.ollama.base_url}")
 
         result = WorkflowResult(
             success=False,
@@ -157,58 +162,61 @@ class TestGenerationWorkflow:
             logger.info(f"[STEP 2 COMPLETE] Target Branch: {self.pr_info.target_branch_name}")
             logger.info(f"[STEP 2 COMPLETE] Changed Files: {len(self.pr_info.changes)}")
 
-            # Step 3: Parse and index codebase
-            logger.info("-" * 40)
-            logger.info("STEP 3/10: Parsing codebase")
-            logger.info("-" * 40)
-            self._parse_codebase()
-            logger.info("[STEP 3 COMPLETE] Codebase indexed successfully")
+            if not only_build:
+                # Step 3: Parse and index codebase
+                logger.info("-" * 40)
+                logger.info("STEP 3/10: Parsing codebase")
+                logger.info("-" * 40)
+                self._parse_codebase()
+                logger.info("[STEP 3 COMPLETE] Codebase indexed successfully")
 
-            # Step 4: Analyze changes
-            logger.info("-" * 40)
-            logger.info("STEP 4/10: Analyzing changes")
-            logger.info("-" * 40)
-            change_analysis = self._analyze_changes()
-            logger.info(f"[STEP 4 COMPLETE] Source changes: {len(change_analysis.source_changes)}")
-            logger.info(f"[STEP 4 COMPLETE] Test changes: {len(change_analysis.test_changes)}")
-            logger.info(f"[STEP 4 COMPLETE] Other changes: {len(change_analysis.other_changes)}")
-            logger.info(f"[STEP 4 COMPLETE] Files needing tests: {len(change_analysis.files_needing_tests)}")
+                # Step 4: Analyze changes
+                logger.info("-" * 40)
+                logger.info("STEP 4/10: Analyzing changes")
+                logger.info("-" * 40)
+                change_analysis = self._analyze_changes()
+                logger.info(f"[STEP 4 COMPLETE] Source changes: {len(change_analysis.source_changes)}")
+                logger.info(f"[STEP 4 COMPLETE] Test changes: {len(change_analysis.test_changes)}")
+                logger.info(f"[STEP 4 COMPLETE] Other changes: {len(change_analysis.other_changes)}")
+                logger.info(f"[STEP 4 COMPLETE] Files needing tests: {len(change_analysis.files_needing_tests)}")
 
-            if not change_analysis.files_needing_tests:
-                logger.info("No source files need test generation - workflow complete")
-                result.success = True
-                return result
+                if not change_analysis.files_needing_tests:
+                    logger.info("No source files need test generation - workflow complete")
+                    result.success = True
+                    return result
 
-            # Log files that need tests
-            for ctx in change_analysis.files_needing_tests:
-                logger.info(f"  - {ctx.change.path} ({ctx.change.change_type.value})")
+                # Log files that need tests
+                for ctx in change_analysis.files_needing_tests:
+                    logger.info(f"  - {ctx.change.path} ({ctx.change.change_type.value})")
 
-            # Step 5: Generate/update tests
-            logger.info("-" * 40)
-            logger.info("STEP 5/10: Generating tests")
-            logger.info("-" * 40)
-            generation_results = self._generate_tests(change_analysis)
+                # Step 5: Generate/update tests
+                logger.info("-" * 40)
+                logger.info("STEP 5/10: Generating tests")
+                logger.info("-" * 40)
+                generation_results = self._generate_tests(change_analysis)
 
-            result.tests_created = len([r for r in generation_results if r.action == "created"])
-            result.tests_modified = len([r for r in generation_results if r.action == "updated"])
-            result.total_test_methods = sum(r.tests_written for r in generation_results)
-            logger.info(f"[STEP 5 COMPLETE] Test files created: {result.tests_created}")
-            logger.info(f"[STEP 5 COMPLETE] Test files modified: {result.tests_modified}")
-            logger.info(f"[STEP 5 COMPLETE] Total test methods written: {result.total_test_methods}")
+                result.tests_created = len([r for r in generation_results if r.action == "created"])
+                result.tests_modified = len([r for r in generation_results if r.action == "updated"])
+                result.total_test_methods = sum(r.tests_written for r in generation_results)
+                logger.info(f"[STEP 5 COMPLETE] Test files created: {result.tests_created}")
+                logger.info(f"[STEP 5 COMPLETE] Test files modified: {result.tests_modified}")
+                logger.info(f"[STEP 5 COMPLETE] Total test methods written: {result.total_test_methods}")
 
-            # Step 6: Handle deleted files
-            logger.info("-" * 40)
-            logger.info("STEP 6/10: Processing deleted files")
-            logger.info("-" * 40)
-            deleted_count = self._handle_deletions(change_analysis)
-            result.tests_deleted = deleted_count
-            logger.info(f"[STEP 6 COMPLETE] Tests deleted: {deleted_count}")
+                # Step 6: Handle deleted files
+                logger.info("-" * 40)
+                logger.info("STEP 6/10: Processing deleted files")
+                logger.info("-" * 40)
+                deleted_count = self._handle_deletions(change_analysis)
+                result.tests_deleted = deleted_count
+                logger.info(f"[STEP 6 COMPLETE] Tests deleted: {deleted_count}")
+            else:
+                logger.info("[BUILD ONLY] Skipping steps 3-6 (parse, analyze, generate, deletions)")
 
             # Step 7: Build and fix loop
             logger.info("-" * 40)
             logger.info("STEP 7/10: Building and fixing")
             logger.info("-" * 40)
-            build_result = self._build_and_fix()
+            build_result = self._build_and_fix(skip_ai_fix=only_build)
             result.build_success = build_result.success
             logger.info(f"[STEP 7 COMPLETE] Build success: {result.build_success}")
 
@@ -224,28 +232,31 @@ class TestGenerationWorkflow:
                         logger.error(f"  - {err.get('file', '?')}:{err.get('line', '?')} {err.get('code', '?')}: {err.get('message', '?')}")
                 result.errors.append("Build failed after fix attempts")
 
-            # Step 8: Run tests
-            logger.info("-" * 40)
-            logger.info("STEP 8/10: Running tests")
-            logger.info("-" * 40)
-            test_result = self._run_tests()
-            result.test_summary = test_result
-            logger.info(f"[STEP 8 COMPLETE] Test results: {test_result}")
+            if not only_build:
+                # Step 8: Run tests
+                logger.info("-" * 40)
+                logger.info("STEP 8/10: Running tests")
+                logger.info("-" * 40)
+                test_result = self._run_tests()
+                result.test_summary = test_result
+                logger.info(f"[STEP 8 COMPLETE] Test results: {test_result}")
 
-            # Step 9: Commit and push
-            logger.info("-" * 40)
-            logger.info("STEP 9/10: Committing changes")
-            logger.info("-" * 40)
-            commit_sha = self._commit_changes(result)
-            result.commit_sha = commit_sha
-            logger.info(f"[STEP 9 COMPLETE] Commit SHA: {commit_sha or 'No changes to commit'}")
+                # Step 9: Commit and push
+                logger.info("-" * 40)
+                logger.info("STEP 9/10: Committing changes")
+                logger.info("-" * 40)
+                commit_sha = self._commit_changes(result)
+                result.commit_sha = commit_sha
+                logger.info(f"[STEP 9 COMPLETE] Commit SHA: {commit_sha or 'No changes to commit'}")
 
-            # Step 10: Post PR comment
-            logger.info("-" * 40)
-            logger.info("STEP 10/10: Posting PR comment")
-            logger.info("-" * 40)
-            self._post_pr_comment(result)
-            logger.info("[STEP 10 COMPLETE] PR comment posted")
+                # Step 10: Post PR comment
+                logger.info("-" * 40)
+                logger.info("STEP 10/10: Posting PR comment")
+                logger.info("-" * 40)
+                self._post_pr_comment(result)
+                logger.info("[STEP 10 COMPLETE] PR comment posted")
+            else:
+                logger.info("[BUILD ONLY] Skipping steps 8-10 (tests, commit, comment)")
 
             result.success = result.build_success
             logger.info("=" * 60)
@@ -358,7 +369,7 @@ class TestGenerationWorkflow:
 
         return deleted_count
 
-    def _build_and_fix(self) -> Any:
+    def _build_and_fix(self, skip_ai_fix: bool = False) -> Any:
         """Build solution and fix any errors."""
         import os
         from dotnet_test_generator.dotnet.builder import BuildResult, BuildErrorInfo
@@ -402,6 +413,10 @@ class TestGenerationWorkflow:
 
         if build_result.success:
             logger.info("[BUILD] ✓ Build succeeded on first attempt")
+            return build_result
+
+        if skip_ai_fix:
+            logger.info(f"[BUILD] Build failed with {build_result.error_count} errors (AI fix skipped - build only mode)")
             return build_result
 
         # Step 7c: Build failed - attempt to fix
@@ -492,6 +507,12 @@ class TestGenerationWorkflow:
 
         # Only stage test files, exclude build artifacts
         self._stage_test_files_only()
+
+        # Check if anything was actually staged
+        status_after = self.git_ops.status()
+        if not status_after["staged"]:
+            logger.info("Nothing staged to commit - skipping commit")
+            return None
 
         # Create commit message
         message = self._create_commit_message(result)

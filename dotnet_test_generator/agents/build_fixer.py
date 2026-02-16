@@ -61,7 +61,7 @@ class BuildFixerAgent(BaseAgent):
         if config is None:
             config = AgentConfig(
                 name="BuildFixer",
-                max_iterations=20,
+                max_iterations=40,
                 max_context_tokens=60000,
             )
 
@@ -308,7 +308,7 @@ class TestFixerAgent(BaseAgent):
         if config is None:
             config = AgentConfig(
                 name="TestFixer",
-                max_iterations=15,
+                max_iterations=30,
                 max_context_tokens=60000,
             )
 
